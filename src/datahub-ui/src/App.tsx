@@ -1,0 +1,41 @@
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { ThemeProvider, CssBaseline } from '@mui/material'
+import { theme } from './theme/theme'
+import { AuthProvider } from './auth/AuthContext'
+import { ProtectedRoute } from './auth/ProtectedRoute'
+import { Layout } from './components/Layout'
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
+import DataSources from './pages/DataSources'
+import DataEntries from './pages/DataEntries'
+import Users from './pages/admin/Users'
+
+export default function App() {
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/data-sources" element={<DataSources />} />
+                      <Route path="/data-entries" element={<DataEntries />} />
+                      <Route path="/admin/users" element={<Users />} />
+                    </Routes>
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
+  )
+}
