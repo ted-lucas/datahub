@@ -1,9 +1,7 @@
 namespace DataHub.Core.Entities;
 
-public class DataEntry
+public class DataEntry : AuditableEntity
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
-
     public Guid? DataSourceId { get; set; }
     public DataSource? DataSource { get; set; }
 
@@ -13,8 +11,10 @@ public class DataEntry
     /// <summary>The actual payload as JSON. Flexible schema for any data domain.</summary>
     public string PayloadJson { get; set; } = "{}";
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
+    /// <summary>
+    /// Domain-specific attribution of the entry to a user (not the same as audit <see cref="AuditableEntity.CreatedBy"/>,
+    /// which is the email stamp of whoever wrote the row).
+    /// </summary>
     public Guid? CreatedByUserId { get; set; }
     public User? CreatedByUser { get; set; }
 }

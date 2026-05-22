@@ -1,5 +1,7 @@
 using System.Text;
+using DataHub.Api.Auth;
 using DataHub.Core.Constants;
+using DataHub.Core.Interfaces;
 using DataHub.Infrastructure;
 using DataHub.Infrastructure.Data;
 using DataHub.Infrastructure.Seeding;
@@ -16,6 +18,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
 
 builder.Services.AddDataHubInfrastructure(builder.Configuration);
 

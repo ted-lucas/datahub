@@ -14,6 +14,7 @@ public static class DbSeeder
 {
     public const string DefaultAdminEmail = "tedlucas@outlook.com";
     public const string DefaultAdminPassword = "DataZilla.247";
+    private const string SourceTag = "seed:bootstrap";
 
     public static async Task SeedAsync(DataHubDbContext db, IPasswordHasher<User> hasher, CancellationToken ct = default)
     {
@@ -22,7 +23,7 @@ public static class DbSeeder
         foreach (var name in Permissions.All)
         {
             if (!existingPermNames.Contains(name))
-                db.Permissions.Add(new Permission { Name = name, Description = name });
+                db.Permissions.Add(new Permission { Name = name, Description = name, Source = SourceTag });
         }
         await db.SaveChangesAsync(ct);
 
@@ -30,7 +31,7 @@ public static class DbSeeder
         var adminRole = await db.Roles.FirstOrDefaultAsync(r => r.Name == Roles.Admin, ct);
         if (adminRole is null)
         {
-            adminRole = new Role { Name = Roles.Admin, Description = "Full access to all functionality." };
+            adminRole = new Role { Name = Roles.Admin, Description = "Full access to all functionality.", Source = SourceTag };
             db.Roles.Add(adminRole);
             await db.SaveChangesAsync(ct);
         }
@@ -58,6 +59,7 @@ public static class DbSeeder
                 FirstName = "Ted",
                 LastName = "Lucas",
                 IsActive = true,
+                Source = SourceTag,
             };
             admin.PasswordHash = hasher.HashPassword(admin, DefaultAdminPassword);
             db.Users.Add(admin);
@@ -69,5 +71,8 @@ public static class DbSeeder
             db.UserRoles.Add(new UserRole { UserId = admin.Id, RoleId = adminRole.Id });
             await db.SaveChangesAsync(ct);
         }
+
+        // Sports module (Baseball / MLB / 30 teams)
+        await SportsSeeder.SeedAsync(db, ct);
     }
 }

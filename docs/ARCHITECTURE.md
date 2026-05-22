@@ -107,6 +107,8 @@ Core has zero external dependencies. Infrastructure owns EF, identity, JWT. Api 
 
 `users:read`, `users:manage`, `roles:manage`, `data:read`, `data:write`, `sources:manage`
 
+*Planned (will seed when Phase 2 lands — see §12):* `sports:read`, `sports:manage`, `geo:read`, `geo:manage`
+
 ### Seeded data (idempotent, on every startup)
 
 - All default permissions
@@ -119,13 +121,37 @@ Core has zero external dependencies. Infrastructure owns EF, identity, JWT. Api 
 
 ## 5. Data Model
 
+### AuditableEntity base class
+
+All persisted domain entities (with a few intentional exceptions, see below) inherit from `DataHub.Core.Entities.AuditableEntity`, which provides:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `Id` | `Guid` | Primary key, defaults to `Guid.NewGuid()` |
+| `IsActive` | `bool` | Soft-delete flag. Services set `false` instead of hard-deleting. Queries should filter where appropriate. |
+| `Source` | `string?` (max 256) | Free-form provenance tag, e.g. `"seed:mlb-initial"`, `"seed:bootstrap"`, `"manual"`, `"import:csv:2025-Q4"`. Lets us trace where any row originated. |
+| `CreatedAt` | `DateTime` (UTC) | Stamped on insert by `DataHubDbContext.SaveChangesAsync` |
+| `CreatedBy` | `string?` (max 256) | Email of the acting user; `"system"` for background work; `"design-time"` for `dotnet ef` operations. Stamped on insert and never overwritten on update. |
+| `UpdatedAt` | `DateTime` (UTC) | Stamped on insert and on every update |
+| `UpdatedBy` | `string?` (max 256) | Same semantics as `CreatedBy` but updated on every change |
+
+**How auditing works:**
+- `DataHub.Core.Interfaces.ICurrentUser` abstracts "who is acting now"; the API layer implements it as `HttpContextCurrentUser` (reads the JWT email claim). Infrastructure has no ASP.NET dependency.
+- `DataHubDbContext` takes an optional `ICurrentUser` via DI; if absent (e.g., design-time factory), it falls back to a `NullCurrentUser` returning `"design-time"` / `"system"`.
+- On `SaveChangesAsync`, the context walks the change tracker: `Added` entries get `CreatedAt/CreatedBy/UpdatedAt/UpdatedBy` stamped; `Modified` entries get only `UpdatedAt/UpdatedBy` (Created* fields are forced `IsModified=false` to prevent accidental overwrites).
+- Explicit values are preserved: stampers use `??=` for Created* so seeders/imports can set them directly when backfilling historical data.
+
+**Exceptions (do NOT inherit AuditableEntity):**
+- `RefreshToken` — short-lived, already has its own lifecycle fields (`CreatedAt`, `ExpiresAt`, `RevokedAt`).
+- `UserRole`, `RolePermission` — pure join tables with composite PKs and no independent lifecycle.
+
 ### Auth tables
 
 | Table | Key fields |
 |-------|-----------|
-| `Users` | Id (Guid), Email (unique), PasswordHash, FirstName, LastName, IsActive, CreatedAt, UpdatedAt |
-| `Roles` | Id, Name (unique), Description |
-| `Permissions` | Id, Name (unique), Description |
+| `Users` | Email (unique), PasswordHash, FirstName, LastName + [AuditableEntity] |
+| `Roles` | Name (unique), Description + [AuditableEntity] |
+| `Permissions` | Name (unique), Description + [AuditableEntity] |
 | `UserRoles` | (UserId, RoleId) composite PK |
 | `RolePermissions` | (RoleId, PermissionId) composite PK |
 | `RefreshTokens` | Id, UserId, Token (unique), ExpiresAt, CreatedAt, RevokedAt |
@@ -134,8 +160,14 @@ Core has zero external dependencies. Infrastructure owns EF, identity, JWT. Api 
 
 | Table | Key fields |
 |-------|-----------|
-| `DataSources` | Id, Name, Type, Description, ConfigJson (nvarchar(max)), CreatedAt |
-| `DataEntries` | Id, DataSourceId (FK, nullable), Category, Tags (csv), PayloadJson (nvarchar(max)), CreatedAt, CreatedByUserId (FK, nullable) |
+| `DataSources` | Name, Type, Description, ConfigJson (nvarchar(max)) + [AuditableEntity] |
+| `DataEntries` | DataSourceId (FK, nullable), Category, Tags (csv), PayloadJson (nvarchar(max)), CreatedByUserId (FK, nullable) + [AuditableEntity] |
+
+Note: `DataEntries.CreatedByUserId` (typed FK to `User`) is intentionally separate from the inherited `CreatedBy` (email string). The FK is the structured pointer for joins/cascade; the inherited string is a denormalized human-readable audit trail consistent with all other tables.
+
+### Sports tables
+
+See §12 for the full Sports domain model. All Sports entities (`Sport`, `SportLevel`, `League`, `Conference`, `Venue`, `Team`, `TeamSeason`) inherit `AuditableEntity`.
 
 **Strategy:** `DataEntries` accepts arbitrary JSON in `PayloadJson` so any domain can be ingested immediately. As patterns stabilize for a domain (e.g., stock quotes, news articles), promote it to a **typed entity** with proper columns and indexes, and migrate.
 
@@ -175,6 +207,28 @@ Core has zero external dependencies. Infrastructure owns EF, identity, JWT. Api 
 - `GET  /api/data-entries/{id}` (perm `data:read`)
 - `POST /api/data-entries`      (perm `data:write`)
 
+### Sports (read = `sports:read`, write = `sports:manage`)
+- `GET    /api/sports`                                        list sports
+- `GET    /api/sports/{id}`                                   sport details
+- `POST   /api/sports`                                        create sport
+- `PUT    /api/sports/{id}`                                   update sport
+- `DELETE /api/sports/{id}`                                   soft-delete
+- `GET    /api/sports/{sportId}/levels`                       list levels
+- `POST   /api/sports/{sportId}/levels`                       create level
+- `GET    /api/sport-levels/{id}`, `PUT`, `DELETE`
+- `GET    /api/sport-levels/{sportLevelId}/leagues`           list leagues
+- `POST   /api/sport-levels/{sportLevelId}/leagues`           create league
+- `GET    /api/leagues/{id}`, `PUT`, `DELETE`
+- `GET    /api/leagues/{leagueId}/conferences`                list conferences
+- `POST   /api/leagues/{leagueId}/conferences`                create conference
+- `GET    /api/conferences/{id}`, `PUT`, `DELETE`
+- `GET    /api/leagues/{leagueId}/teams`                      list teams in a league
+- `POST   /api/leagues/{leagueId}/teams`                      create team
+- `GET    /api/teams`, `GET /api/teams/{id}`, `PUT`, `DELETE`
+- `GET    /api/venues`, `GET /api/venues/{id}`, `POST`, `PUT`, `DELETE`
+
+> See `src/DataHub.Api/DataHub.Api.http` for runnable request examples.
+
 ---
 
 ## 7. Frontend
@@ -212,7 +266,10 @@ Open http://localhost:5173 and log in with the seeded admin.
 
 ### Backend
 - **Layered**: Core (pure) → Infrastructure (EF, JWT, hashing) → Api (HTTP + composition).
-- **Entities** use `Guid` primary keys, auto-defaulted via property initializers.
+- **Entities** inherit `DataHub.Core.Entities.AuditableEntity` unless they are short-lived (e.g., `RefreshToken`) or pure join tables (`UserRole`, `RolePermission`). See §5.
+- **Soft-delete by default**: services set `IsActive = false` rather than calling `Remove`. Read queries filter on `IsActive` where it makes sense; admin-facing read endpoints may include inactive rows.
+- **Provenance via `Source`**: every seeder, importer, or batch tool should set the `Source` string (e.g. `"seed:mlb-initial"`, `"import:nfl-2024-rosters"`) so origins are traceable.
+- **Audit auto-stamping**: never set `CreatedAt/CreatedBy/UpdatedAt/UpdatedBy` manually in services — `DataHubDbContext.SaveChangesAsync` does it via `ICurrentUser`. Seeders may set them explicitly to backfill historical data.
 - **JSON columns** are typed as `nvarchar(max)` and named with `Json` suffix (e.g., `PayloadJson`).
 - **Permissions** are referenced via the strongly-typed `DataHub.Core.Constants.Permissions` constants — never hard-code permission strings in controllers.
 - **DTOs are `record`** types in `DataHub.Core.DTOs.*` namespaces.
@@ -221,12 +278,13 @@ Open http://localhost:5173 and log in with the seeded admin.
 - **Auth in controllers**: prefer `[Authorize(Policy = Permissions.SomePermission)]` over role checks.
 
 ### Adding a new entity
-1. Add the entity class under `DataHub.Core/Entities/`.
-2. Add an `IEntityTypeConfiguration<T>` in `DataHub.Infrastructure/Data/Configurations/EntityConfigurations.cs`.
-3. Add a `DbSet<T>` in `DataHubDbContext`.
+1. Add the entity class under `DataHub.Core/Entities/`, inheriting `AuditableEntity` (don't redeclare `Id`/`IsActive`/`CreatedAt`/`CreatedBy`/`UpdatedAt`/`UpdatedBy`/`Source`).
+2. Add an `IEntityTypeConfiguration<T>` in `DataHub.Infrastructure/Data/Configurations/` (a `*Configurations.cs` file per module is fine).
+3. Add a `DbSet<T>` in `DataHubDbContext`. The reflection loop in `OnModelCreating` will apply `HasMaxLength(256)` to all audit string columns automatically.
 4. Create a migration: `dotnet ef migrations add <Name> -p src/DataHub.Infrastructure -s src/DataHub.Api -o Data/Migrations`.
 5. Add DTOs in `DataHub.Core/DTOs/`, a service interface in `Core/Interfaces/`, an implementation in `Infrastructure/Services/`, and a controller in `Api/Controllers/`.
-6. Update this doc's API Endpoints section.
+6. In services, implement deletes as `entity.IsActive = false` followed by `SaveChangesAsync` — do not call `db.Remove(entity)` unless you explicitly need a hard delete.
+7. Update this doc's API Endpoints section and add a runnable example to `DataHub.Api.http`.
 
 ### Adding a new permission
 1. Add the constant to `DataHub.Core.Constants.Permissions` and include it in `Permissions.All`.
@@ -265,6 +323,28 @@ Open http://localhost:5173 and log in with the seeded admin.
   Lets us ingest any domain immediately. Typed entities will be promoted from this pattern as domains stabilize.
 - **2026-05-22 — Seed admin = `tedlucas@outlook.com`. Password stored hashed only; raw value lives only in this design note and the seeder constant (which writes the hash).**
   Note: change `DbSeeder.DefaultAdminPassword` before any non-local deployment.
+- **2026-05-22 — Phase 2 sports taxonomy: Sport → Level → League → (Conference) → Team.**
+  Level is per-Sport so dropdowns stay sensible; League disambiguates team names ("Cardinals"); Conference is optional and league-specific. See §12.1.
+- **2026-05-22 — Bitemporal `EffectiveFrom` / `EffectiveTo` on fact-bearing rows.**
+  Enables historical truth without destructive edits (team relocations, league changes) and powers the universal time slider. See §12.1.3.
+- **2026-05-22 — Map-centric UX with three interchangeable viewers (Map / Grid / Dashboard) sharing filters and time window.**
+  Map is the primary view; Grid is the power-user fallback; Dashboard is for aggregates. See §12.3.
+- **2026-05-22 — Geo scope: US-only for Phase 2 (Country / State / County).**
+  Schema is country-agnostic; expansion is data work, not schema work. See §12.2.
+- **2026-05-22 — Map library: `react-leaflet` + Leaflet with OpenStreetMap tiles for Phase 2.**
+  No API key, easy choropleths, smallest learning curve. Swap to MapLibre / vector tiles is a future option, not a blocker.
+- **2026-05-22 — Time granularity is per-dataset, declared by an `IDatasetTimeProfile`.**
+  Keeps the slider one component while supporting both season-level (Teams) and day-level (Games) data. See §12.4.
+- **2026-05-22 — Admin UX is hybrid: generic tree editor + dedicated per-level pages.**
+  Tree for ergonomic navigation and single-item edits; per-level pages for bulk import/export and high-volume grid editing. See §12.5.
+- **2026-05-22 — Geometry stored twice: SQL Server `geography` columns (for server-side spatial queries) + cached GeoJSON/TopoJSON files (for frontend rendering).**
+  Pays a small ingest-time cost for both forward-compatibility and runtime speed. Requires `Microsoft.EntityFrameworkCore.SqlServer.NetTopologySuite`. See §12.2.
+- **2026-05-22 — Universal `AuditableEntity` base + `ICurrentUser` abstraction.**
+  Every long-lived domain entity inherits `Id / IsActive / Source / CreatedAt / CreatedBy / UpdatedAt / UpdatedBy`. `CreatedBy/UpdatedBy` are email strings (denormalized) so audit history survives user deletion and is human-readable. `ICurrentUser` lives in Core so Infrastructure stays free of ASP.NET; the API layer provides `HttpContextCurrentUser`. See §5.
+- **2026-05-22 — Soft-delete is the default; hard-delete is opt-in.**
+  Services set `IsActive=false` instead of `Remove`. Avoids accidental data loss and preserves audit chains for historical analysis.
+- **2026-05-22 — `Source` provenance field on every auditable row.**
+  Free-form string (`"seed:bootstrap"`, `"seed:mlb-initial"`, `"import:nfl-2024"`, `"manual"`, etc.). Makes it trivial to identify, count, and bulk-re-process rows from a specific ingest run.
 
 ---
 
@@ -281,6 +361,7 @@ Open http://localhost:5173 and log in with the seeded admin.
 - [ ] Rate limiting + request validation pipeline.
 - [ ] Frontend: code-splitting (bundle is >500KB), centralized error handling, dark mode toggle.
 - [ ] CI: build + test pipeline; pre-commit hooks.
+- [ ] **Phase 2 — Sports domain + US Geo reference data + Map/Grid/Dashboard viewers + Universal Time Slider** (see §12 for full plan).
 
 ---
 
@@ -311,3 +392,254 @@ dotnet ef database update \
   --startup-project src/DataHub.Api
 ```
 (Not strictly needed — `Program.cs` migrates on startup.)
+
+---
+
+## 12. Phase 2 — Sports Domain, Map-Centric UI & Time-Aware Data
+
+> **Status:** Design / planning. No code yet. This phase introduces the first concrete data domain (**Sports**), establishes a reusable **hierarchical-taxonomy pattern**, and defines the cross-cutting UX primitives every future domain will reuse: a **map-centric viewer**, a **grid viewer**, a **dashboard viewer**, and a **universal time slider**.
+
+### 12.1 Domain Model — Sports Taxonomy
+
+Sports data is organized as a strict hierarchy. Each level is its own entity so admins can manage them independently and so we can attach data, media, and metadata at any level.
+
+```
+Sports (root domain)
+ └── Sport            e.g. Baseball, Football, Basketball, Hockey, Golf
+      └── Level       e.g. Professional, Collegiate, High School
+           └── League e.g. MLB, NFL, NCAA D-I, MHSAA
+                └── Conference / Division   (optional, league-specific)
+                     └── Team       e.g. Cardinals, Yankees
+                          └── Season  (Team × Year)
+                               └── Roster / Player / Game (future)
+```
+
+#### 12.1.1 Tables (proposed)
+
+| Table | Key fields | Notes |
+|-------|-----------|-------|
+| `Sports` | Id (Guid), Name (unique), Slug, IconRef, SortOrder, IsActive, CreatedAt, UpdatedAt | Top-level (Baseball, Football, …) |
+| `SportLevels` | Id, SportId (FK), Name, SortOrder, IsActive; UNIQUE(SportId, Name) | (Sport, Level) — e.g. Baseball/Professional |
+| `Leagues` | Id, SportLevelId (FK), Name, Abbreviation, Country, FoundedYear, IsActive | MLB, NFL, NCAA D-I |
+| `Conferences` | Id, LeagueId (FK), Name, ParentConferenceId (self-FK, nullable), IsActive | Supports Division-of-Conference |
+| `Teams` | Id, LeagueId (FK), ConferenceId (FK, nullable), Name, City, State, Country, FoundedYear, PrimaryColor, SecondaryColor, LogoRef, VenueId (FK, nullable), IsActive | Joins to geography via City/State |
+| `Venues` | Id, Name, Address, City, State, Country, Lat, Lon, Capacity, OpenedYear, ClosedYear, IsActive | Geolocated — drives map point overlays |
+| `TeamSeasons` | Id, TeamId (FK), Year, LeagueId (FK), ConferenceId (FK, nullable), EffectiveFrom, EffectiveTo, Notes | Time-scoped team facts (e.g. league changes, relocations) |
+
+**Why split Level out of Sport:** the same level name ("Professional") recurs across Sports, but the *teams* under Baseball/Professional are different from Football/Professional. Modeling Level as `(SportId, Name)` keeps the dropdowns sensible and lets us add a per-sport icon, color, or sort order.
+
+**Why introduce League between Level and Team:** without it, "Cardinals" is ambiguous (St. Louis baseball vs. Arizona football vs. Louisville college). League pins it down and is the natural unit for schedules, standings, and rules variations later.
+
+#### 12.1.2 Hierarchical-taxonomy pattern (reusable)
+
+This Sport → Level → League → Conference → Team shape is a specific instance of a general pattern we will reuse for other domains (Geography below, future taxonomies). All taxonomy entities share:
+
+- `Id` (Guid), `Name`, `Slug`, `SortOrder`, `CreatedAt`, `UpdatedAt`, `IsActive`
+- A nullable `ParentId` or strongly-typed parent FK
+- **Soft-delete** (`IsActive=false`) instead of hard-delete, so historical data references survive
+
+#### 12.1.3 Time-awareness on every fact
+
+Every fact-bearing row in the Sports module (and elsewhere) carries a **bitemporal time window**:
+
+- `EffectiveFrom` (UTC, required)
+- `EffectiveTo` (UTC, nullable — open-ended means "currently true")
+
+This lets us render historical truth ("show the league as of 1998") without destructive edits. Examples:
+- A Team that relocated has two `TeamSeasons` ranges in different cities.
+- A League whose conference structure changed has overlapping `Conferences` rows with non-overlapping time windows.
+
+---
+
+### 12.2 Geographic Reference Data (US-only, Phase 2)
+
+A separate taxonomy supports the map-centric UI. **Scope is intentionally US-only for Phase 2**; schema is country-agnostic so expansion is data work, not schema work.
+
+| Table | Key fields | Notes |
+|-------|-----------|-------|
+| `Countries` | Id, IsoAlpha2 (unique), IsoAlpha3, Name, Geometry (`geography`, nullable), GeoJsonRef | Seeded with USA only for Phase 2 |
+| `StatesProvinces` | Id, CountryId (FK), Code (e.g. "MO"), Name, Geometry (`geography`, nullable), GeoJsonRef | 50 US states + DC |
+| `Counties` | Id, StateId (FK), FipsCode (unique), Name, Geometry (`geography`, nullable), GeoJsonRef | ~3,143 US counties; FIPS is the canonical join key |
+
+**Dual geometry storage** (decision §9, 2026-05-22):
+
+- **`Geometry` column** (SQL Server `geography`) — for future server-side spatial queries (contains-point, within-radius, intersect-with-polygon). Requires `Microsoft.EntityFrameworkCore.SqlServer.NetTopologySuite`.
+- **`GeoJsonRef`** — relative path/URL to a pre-simplified GeoJSON/TopoJSON file served as a static asset for fast frontend rendering.
+
+The frontend uses `GeoJsonRef`; the API may consult `Geometry` for spatial operations later.
+
+#### 12.2.1 Geometry pipeline
+
+| Step | Source | Tool / target |
+|------|--------|---------------|
+| Country (USA) | Natural Earth 1:50m admin-0 | Convert to GeoJSON, simplify to ~50KB |
+| States (50 + DC) | US Census TIGER/Line (`tl_*_us_state.shp`) | Convert with `ogr2ogr`, simplify to ~50KB total |
+| Counties (~3,143) | US Census TIGER/Line (`tl_*_us_county.shp`) | Convert, simplify per-state to ~5KB / county |
+
+- Files land in `src/datahub-ui/public/geo/{country,state,county}/<id>.geojson` (or are served from `GET /api/geo/geometry/...` with an ETag).
+- The same source data is imported into the DB `Geometry` columns by a one-time seed (or migration data step).
+- Simplification target balances size and visual fidelity. Tune later.
+
+#### 12.2.2 Joining sports to geography
+
+- `Venues.Lat/Lon` → point overlays on the map.
+- `Teams.State`, `Teams.City` → choropleth aggregation by state / county.
+- All overlays respect the active time slider window (§12.4).
+
+---
+
+### 12.3 Frontend — Three Viewer Modes
+
+Every dataset (Sports first, others to follow) is viewable through three interchangeable surfaces that share filters and the time slider:
+
+| Mode | Purpose | Library |
+|------|---------|---------|
+| **Map** | *Primary* view. Choropleths + point overlays + drill-down. | `react-leaflet` + Leaflet, OpenStreetMap tiles |
+| **Grid** | Power-user tabular browse, sort, filter, export. | MUI X DataGrid (Community) |
+| **Dashboard** | Aggregated KPIs, charts, breakdowns. | Recharts (or Apache ECharts if needs grow) |
+
+#### 12.3.1 Map drill-down
+
+The map operates in four scopes, switchable via a control:
+
+1. **World** — overview (Phase 2: only US is highlighted/clickable; rest of world is greyed)
+2. **Country (US)** — US choropleth by state
+3. **State** — single-state view, choropleth by county
+4. **County** — single-county view, point-level data (venues, events)
+
+Drill-down is bidirectional: click a state in Country view to enter State view; a breadcrumb (`USA › Missouri › St. Louis County`) is always visible and clickable.
+
+#### 12.3.2 Layout sketch
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ AppBar (existing)                                            │
+├──────────┬───────────────────────────────────────────────────┤
+│ Drawer   │ Filters bar (Sport, Level, League, …)             │
+│ (nav)    ├───────────────────────────────────────────────────┤
+│          │ View toggle: [ Map | Grid | Dashboard ]           │
+│          ├───────────────────────────────────────────────────┤
+│          │                                                   │
+│          │     ACTIVE VIEWER (Map / Grid / Dashboard)        │
+│          │                                                   │
+│          ├───────────────────────────────────────────────────┤
+│          │ Time slider:  [1900 ●━━━━━●━━━━━━━━━━ 2026]       │
+│          │ Range: 1985-01-01 → 2010-12-31  [Play ▶] [step]   │
+│          └───────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 12.4 Universal Time Slider
+
+A first-class, app-wide UI primitive:
+
+- **Dual-handle range slider** with start and end dates.
+- **Per-dataset granularity** (decision §9, 2026-05-22): each dataset declares an `IDatasetTimeProfile { granularity: 'day' | 'month' | 'year' | 'season'; minDate; maxDate; defaultStep; snapPoints? }`. The slider adapts tick marks, snap behavior, and playback step to the active profile.
+- **Playback** mode animates the upper handle forward at a configurable step (e.g., 1 year/sec for season-level data, 1 day/sec for game-level data).
+- **Snap** to common boundaries (season start, calendar year, decade) when the profile defines `snapPoints`.
+- State lives in a React context (`TimeRangeContext`) so Map / Grid / Dashboard all react to the same window.
+- **URL-synced** (`?from=…&to=…&g=year`) so views are shareable/bookmarkable.
+
+---
+
+### 12.5 Admin UI — Hybrid Hierarchical Editor
+
+Decision §9 (2026-05-22): we offer **two complementary surfaces** that hit the same API and respect the same permissions.
+
+#### 12.5.1 Generic Tree Editor — `/admin/taxonomy/sports`
+
+- **Left pane:** lazy-loaded tree of the full hierarchy (Sport → Level → League → … → Team).
+- **Right pane:** form for the selected node, with **+ Add child** action contextual to the selected level.
+- Permission-gated: `sports:read` to view, `sports:manage` to mutate.
+- The component is **generic over the taxonomy** — driven by a per-domain schema descriptor (level names, allowed children, form fields). Reused later by `/admin/taxonomy/geography`.
+
+#### 12.5.2 Dedicated per-level pages
+
+For high-volume operations the tree is bad at:
+
+| Route | Purpose |
+|-------|---------|
+| `/admin/sports` | List + create Sports |
+| `/admin/sport-levels` | List + create Levels (filtered by Sport) |
+| `/admin/leagues` | List + create Leagues (filtered by Sport/Level), **CSV/JSON bulk import** |
+| `/admin/conferences` | List + create Conferences (filtered by League) |
+| `/admin/teams` | DataGrid view of Teams with inline edit + **CSV/JSON bulk import/export** (e.g., seed all 30 MLB teams in one shot) |
+| `/admin/venues` | List + create + import |
+
+Each page uses the same MUI X DataGrid component pattern; bulk import accepts CSV or JSON, validates row-by-row, and shows a per-row success/error report.
+
+#### 12.5.3 Soft-delete
+
+All taxonomy CRUD uses soft-delete (toggle `IsActive`), with a "show inactive" filter. Hard-delete is admin-only and prohibited if any time-scoped fact references the row.
+
+---
+
+### 12.6 New Permissions (to be seeded)
+
+- `sports:read`, `sports:manage`
+- `geo:read`, `geo:manage`
+
+These follow the same pattern as existing permissions: add to `DataHub.Core.Constants.Permissions`, include in `Permissions.All`, and the seeder + policy registration handle the rest (see §8 "Adding a new permission").
+
+---
+
+### 12.7 New API Endpoints (sketch — to be detailed when implemented)
+
+```
+# Sports taxonomy CRUD
+GET    /api/sports                              (sports:read)
+POST   /api/sports                              (sports:manage)
+GET    /api/sports/{sportId}/levels             (sports:read)
+POST   /api/sports/{sportId}/levels             (sports:manage)
+GET    /api/sport-levels/{levelId}/leagues      (sports:read)
+POST   /api/sport-levels/{levelId}/leagues      (sports:manage)
+GET    /api/leagues/{leagueId}/conferences      (sports:read)
+POST   /api/leagues/{leagueId}/conferences      (sports:manage)
+GET    /api/leagues/{leagueId}/teams            (sports:read)
+POST   /api/leagues/{leagueId}/teams            (sports:manage)
+GET    /api/teams/{teamId}                      (sports:read)
+
+# Bulk import (per level)
+POST   /api/sports/{sportId}/levels/import      (sports:manage)
+POST   /api/leagues/import                      (sports:manage)
+POST   /api/teams/import                        (sports:manage)
+POST   /api/venues/import                       (sports:manage)
+
+# Query (Map / Grid / Dashboard)
+GET    /api/teams?sport=baseball&level=professional&state=MO&from=…&to=…   (sports:read)
+GET    /api/venues?bbox=…&from=…&to=…                                       (sports:read)
+
+# Geography
+GET    /api/geo/countries                       (geo:read)
+GET    /api/geo/states?country=US               (geo:read)
+GET    /api/geo/counties?state=MO               (geo:read)
+GET    /api/geo/geometry/{level}/{id}           (geo:read)  -- returns simplified GeoJSON, ETag-cached
+```
+
+All collection endpoints accept `from` / `to` query params honoring the active time window. All write endpoints validate that parent FKs exist and that `(SportId, Name)`-style uniqueness holds.
+
+---
+
+### 12.8 Build Order (suggested, not binding)
+
+1. **Backend taxonomy:** `Sports`, `SportLevels`, `Leagues`, `Conferences`, `Teams`, `Venues` entities + EF configurations + migration + CRUD endpoints + new permissions in seeder.
+2. **Backend geography:** `Countries`, `StatesProvinces`, `Counties` entities with both `Geometry` (NetTopologySuite) and `GeoJsonRef`; one-time seed that imports US data and emits GeoJSON files to `src/datahub-ui/public/geo/`.
+3. **Frontend — generic tree editor (`TaxonomyAdmin`)** wired to Sports first.
+4. **Frontend — `TimeRangeContext` + slider primitive** with a baked-in `IDatasetTimeProfile` for Teams (year-level).
+5. **Frontend — Grid viewer** (lowest risk, fastest payoff, validates the filter + time-window contract).
+6. **Frontend — Map viewer** at Country scope, then State, then County (drill-down).
+7. **Frontend — Dashboard viewer** with a small set of starter charts (teams per state, leagues per sport over time, venue capacity distribution).
+8. **Frontend — per-level admin pages** with bulk CSV/JSON import/export.
+9. **Cross-cutting:** URL sync (`?from&to&g&scope`), drill-down breadcrumb, playback animation.
+
+---
+
+### 12.9 Open Questions / Deferred
+
+- **Vector tiles?** If raster OSM tiles feel limiting, evaluate MapLibre GL + a vector tile provider. Not blocking Phase 2.
+- **Spatial queries on the server.** We're storing `geography` columns now but not using them in Phase 2. First real use case (e.g. "all venues within 100mi of a point") will validate the choice.
+- **Real-time data.** Sports schedules and live scores are out of scope for Phase 2; the architecture supports them (TeamSeasons → Games → LiveEvents) but we build that when there's a concrete need.
+- **Non-US geography.** Schema supports it; we defer the data + UX work until a non-US dataset arrives.
+

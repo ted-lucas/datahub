@@ -1,6 +1,167 @@
 @DataHub.Api_HostAddress = http://localhost:5275
+@adminEmail = tedlucas@outlook.com
+@adminPassword = DataZilla.247
 
-GET {{DataHub.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+### ---------------------------------------------------------------------------
+### Auth: login (capture the accessToken into @token below for subsequent calls)
+### ---------------------------------------------------------------------------
+# @name login
+POST {{DataHub.Api_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+###
+@token = {{login.response.body.accessToken}}
+
+### ---------------------------------------------------------------------------
+### Sports
+### ---------------------------------------------------------------------------
+
+### List sports
+GET {{DataHub.Api_HostAddress}}/api/sports
+Authorization: Bearer {{token}}
+
+### Create sport
+POST {{DataHub.Api_HostAddress}}/api/sports
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Football",
+  "slug": "football",
+  "sortOrder": 20
+}
+
+### ---------------------------------------------------------------------------
+### Sport Levels (e.g. Professional, College)
+### ---------------------------------------------------------------------------
+
+### List levels for a sport
+# Replace {sportId} with a real GUID from the sports list
+GET {{DataHub.Api_HostAddress}}/api/sports/{sportId}/levels
+Authorization: Bearer {{token}}
+
+### Create level
+POST {{DataHub.Api_HostAddress}}/api/sports/{sportId}/levels
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "College",
+  "sortOrder": 20
+}
+
+### ---------------------------------------------------------------------------
+### Leagues (e.g. MLB)
+### ---------------------------------------------------------------------------
+
+### List leagues for a level
+GET {{DataHub.Api_HostAddress}}/api/sport-levels/{sportLevelId}/leagues
+Authorization: Bearer {{token}}
+
+### Create league
+POST {{DataHub.Api_HostAddress}}/api/sport-levels/{sportLevelId}/leagues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "NCAA Division I Baseball",
+  "abbreviation": "D1",
+  "country": "USA"
+}
+
+### ---------------------------------------------------------------------------
+### Conferences (e.g. AL, NL, AL East)
+### ---------------------------------------------------------------------------
+
+### List conferences for a league
+GET {{DataHub.Api_HostAddress}}/api/leagues/{leagueId}/conferences
+Authorization: Bearer {{token}}
+
+### Create conference
+POST {{DataHub.Api_HostAddress}}/api/leagues/{leagueId}/conferences
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "American League",
+  "parentConferenceId": null
+}
+
+### ---------------------------------------------------------------------------
+### Teams
+### ---------------------------------------------------------------------------
+
+### List teams for a league
+GET {{DataHub.Api_HostAddress}}/api/leagues/{leagueId}/teams
+Authorization: Bearer {{token}}
+
+### Get team by id
+GET {{DataHub.Api_HostAddress}}/api/teams/{teamId}
+Authorization: Bearer {{token}}
+
+### Create team
+POST {{DataHub.Api_HostAddress}}/api/leagues/{leagueId}/teams
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Example Team",
+  "city": "Anytown",
+  "state": "CA",
+  "country": "USA",
+  "conferenceId": null,
+  "venueId": null,
+  "primaryColor": "#003366",
+  "secondaryColor": "#FFFFFF"
+}
+
+### Update team
+PUT {{DataHub.Api_HostAddress}}/api/teams/{teamId}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Example Team",
+  "city": "Othertown",
+  "state": "CA",
+  "country": "USA",
+  "conferenceId": null,
+  "venueId": null,
+  "primaryColor": "#003366",
+  "secondaryColor": "#FFFFFF"
+}
+
+### Soft-delete team
+DELETE {{DataHub.Api_HostAddress}}/api/teams/{teamId}
+Authorization: Bearer {{token}}
+
+### ---------------------------------------------------------------------------
+### Venues
+### ---------------------------------------------------------------------------
+
+### List venues
+GET {{DataHub.Api_HostAddress}}/api/venues
+Authorization: Bearer {{token}}
+
+### Create venue
+POST {{DataHub.Api_HostAddress}}/api/venues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Example Stadium",
+  "city": "Anytown",
+  "state": "CA",
+  "country": "USA",
+  "lat": 37.7749,
+  "lon": -122.4194,
+  "capacity": 40000,
+  "openedYear": 2000
+}
 
 ###

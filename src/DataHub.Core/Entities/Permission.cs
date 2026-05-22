@@ -1,8 +1,7 @@
 namespace DataHub.Core.Entities;
 
-public class Permission
+public class Permission : AuditableEntity
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
 
