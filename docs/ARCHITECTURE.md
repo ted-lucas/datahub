@@ -105,9 +105,7 @@ Core has zero external dependencies. Infrastructure owns EF, identity, JWT. Api 
 
 ### Default permissions
 
-`users:read`, `users:manage`, `roles:manage`, `data:read`, `data:write`, `sources:manage`
-
-*Planned (will seed when Phase 2 lands — see §12):* `sports:read`, `sports:manage`, `geo:read`, `geo:manage`
+`users:read`, `users:manage`, `roles:manage`, `data:read`, `data:write`, `sources:manage`, `sports:read`, `sports:manage`, `geo:read`, `geo:manage`
 
 ### Seeded data (idempotent, on every startup)
 
@@ -227,6 +225,32 @@ See §12 for the full Sports domain model. All Sports entities (`Sport`, `SportL
 - `GET    /api/teams`, `GET /api/teams/{id}`, `PUT`, `DELETE`
 - `GET    /api/venues`, `GET /api/venues/{id}`, `POST`, `PUT`, `DELETE`
 
+### Geo (read = `geo:read`, write = `geo:manage`)
+- `GET    /api/geo/countries`                                 list countries
+- `GET    /api/geo/countries/{id}`                            country details
+- `GET    /api/geo/countries/by-iso2/{iso2}`                  lookup by ISO-2 (e.g. `US`)
+- `POST   /api/geo/countries`                                 create country
+- `PUT    /api/geo/countries/{id}`                            update country
+- `DELETE /api/geo/countries/{id}`                            soft-delete
+- `PUT    /api/geo/countries/{id}/geometry`                   set geometry from GeoJSON
+- `GET    /api/geo/countries/{countryId}/states`              list states in a country
+- `POST   /api/geo/countries/{countryId}/states`              create state under a country
+- `GET    /api/geo/states/{id}`, `PUT`, `DELETE`, `PUT {id}/geometry`
+- `GET    /api/geo/states/{stateId}/counties`                 list counties in a state
+- `POST   /api/geo/states/{stateId}/counties`                 create county under a state
+- `GET    /api/geo/counties/{id}`, `PUT`, `DELETE`, `PUT {id}/geometry`
+
+#### Geo cache (static, no auth)
+Pre-rendered GeoJSON files emitted to `wwwroot/geo-cache/` and served as `application/geo+json` with long-cache headers (`max-age=31536000, immutable`). The frontend reads geometry from here rather than from the API DTOs (which omit raw geometry to keep responses small).
+
+```
+/geo-cache/countries/{id}.geojson              single country feature
+/geo-cache/states/{id}.geojson                 single state feature
+/geo-cache/counties/{id}.geojson               single county feature
+/geo-cache/states/bundle-{countryId}.geojson   FeatureCollection of all states in a country
+/geo-cache/counties/bundle-{stateId}.geojson   FeatureCollection of all counties in a state
+```
+
 > See `src/DataHub.Api/DataHub.Api.http` for runnable request examples.
 
 ---
@@ -345,6 +369,14 @@ Open http://localhost:5173 and log in with the seeded admin.
   Services set `IsActive=false` instead of `Remove`. Avoids accidental data loss and preserves audit chains for historical analysis.
 - **2026-05-22 — `Source` provenance field on every auditable row.**
   Free-form string (`"seed:bootstrap"`, `"seed:mlb-initial"`, `"import:nfl-2024"`, `"manual"`, etc.). Makes it trivial to identify, count, and bulk-re-process rows from a specific ingest run.
+- **2026-05-23 — Geo seed source: us-atlas `counties-10m.geojson` (TopoJSON repo's GeoJSON export), embedded as a resource in `DataHub.Infrastructure`.**
+  ~3.6 MB, ~3,143 features, WGS84 lon/lat, suitable for choropleth at national zoom. Embedded (not `CopyToOutputDirectory`) so it survives publishing. State polygons are *not* a separate file — they're computed by dissolving counties (see below). Feature `id` is the 5-digit county FIPS; first 2 digits → state FIPS → joined to a hard-coded `UsStates.ByFips` lookup for postal code + display name (territories like PR/VI omitted because the source doesn't include them).
+- **2026-05-23 — Geometry insertion strategy: SQL Server is the orientation authority. EF Core inserts rows with `Geometry = NULL`; raw SQL then sets geometry via `geography::STGeomFromText(@wkt, 4326)`, with a per-polygon orientation-discovery retry for MultiPolygons whose sub-polygons disagree.**
+  Background: NTS's `SqlServerBytesWriter` does a *planar* CCW test that systematically disagrees with SQL Server's *spherical* orientation rule for ~84% of US counties, and no client-side shoelace/orientation algorithm reliably matches what the server accepts. The robust approach is to let the server itself be the oracle: send WKT, catch orientation errors, and probe each sub-polygon in either orientation with a no-op `SELECT geography::STGeomFromText(...)` to find what the parser accepts, then rebuild a clean MultiPolygon WKT and UPDATE. Eliminates all county geometry failures.
+- **2026-05-23 — State polygons computed in SQL via `geography::UnionAggregate(Geometry.MakeValid())` grouped by `StateId`, run after all counties are loaded.**
+  NTS's `UnaryUnionOp` chokes on coordinates near the antimeridian (American Samoa territory bleed, Aleutians). SQL Server's planetary union handles these natively. `MakeValid()` on each input county defends against `GeographyUnionAggregate` rejecting any individual invalid geometry. Single SQL statement updates all 51 states.
+- **2026-05-23 — Geo cache: per-entity GeoJSON files + per-parent bundles served as static assets from `wwwroot/geo-cache/`.**
+  API DTOs intentionally omit raw geometry to keep responses small; the frontend reads geometry from these cache files instead. Layout: `countries/{id}.geojson`, `states/{id}.geojson`, `counties/{id}.geojson`, plus `states/bundle-{countryId}.geojson` and `counties/bundle-{stateId}.geojson`. Served with `Content-Type: application/geo+json` and `Cache-Control: public, max-age=31536000, immutable`. Cache root configurable via `Geo:CacheRoot`; defaults to `<contentRoot>/wwwroot/geo-cache`. Cache writer is invoked from `GeoService` on every create/update/setGeometry call.
 
 ---
 

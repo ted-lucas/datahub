@@ -74,5 +74,9 @@ public static class DbSeeder
 
         // Sports module (Baseball / MLB / 30 teams)
         await SportsSeeder.SeedAsync(db, ct);
+
+        // Geo module (USA + 50 states + DC + ~3,200 counties).
+        // Idempotent; first run takes 30-90s, subsequent runs are no-ops.
+        await GeoSeeder.SeedAsync(db, ct);
     }
 }

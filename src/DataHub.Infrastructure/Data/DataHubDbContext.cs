@@ -1,4 +1,5 @@
 using DataHub.Core.Entities;
+using DataHub.Core.Entities.Geo;
 using DataHub.Core.Entities.Sports;
 using DataHub.Core.Interfaces;
 using DataHub.Infrastructure.Data.Configurations;
@@ -35,6 +36,11 @@ public class DataHubDbContext : DbContext
     public DbSet<Venue> Venues => Set<Venue>();
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<TeamSeason> TeamSeasons => Set<TeamSeason>();
+
+    // Geo module
+    public DbSet<Country> Countries => Set<Country>();
+    public DbSet<State> States => Set<State>();
+    public DbSet<County> Counties => Set<County>();
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

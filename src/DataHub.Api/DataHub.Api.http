@@ -164,4 +164,171 @@ Content-Type: application/json
   "openedYear": 2000
 }
 
+### ---------------------------------------------------------------------------
+### Geo: Countries
+### ---------------------------------------------------------------------------
+
+### List countries
+GET {{DataHub.Api_HostAddress}}/api/geo/countries
+Authorization: Bearer {{token}}
+
+### Get country (USA) by ISO2
+# @name getUsa
+GET {{DataHub.Api_HostAddress}}/api/geo/countries/by-iso2/US
+Authorization: Bearer {{token}}
+
+###
+@countryId = {{getUsa.response.body.id}}
+
+### Get country by id
+GET {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}
+Authorization: Bearer {{token}}
+
+### Create country
+POST {{DataHub.Api_HostAddress}}/api/geo/countries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "iso2": "CA",
+  "iso3": "CAN",
+  "name": "Canada"
+}
+
+### Update country
+PUT {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "iso2": "US",
+  "iso3": "USA",
+  "name": "United States of America"
+}
+
+### Set country geometry (GeoJSON Polygon or MultiPolygon, WGS84 lon/lat)
+PUT {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}/geometry
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-125,24],[-66,24],[-66,49],[-125,49],[-125,24]]]}"
+}
+
+### Soft-delete country
+DELETE {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}
+Authorization: Bearer {{token}}
+
+### ---------------------------------------------------------------------------
+### Geo: States
+### ---------------------------------------------------------------------------
+
+### List states for USA
+GET {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}/states
+Authorization: Bearer {{token}}
+
+### Get state by id
+# Replace with a real GUID from the list above
+GET {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}
+Authorization: Bearer {{token}}
+
+### Create state under USA
+POST {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}/states
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "code": "PR",
+  "name": "Puerto Rico",
+  "fips": "72"
+}
+
+### Update state
+PUT {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "code": "CA",
+  "name": "California",
+  "fips": "06"
+}
+
+### Set state geometry
+PUT {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}/geometry
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-124,32],[-114,32],[-114,42],[-124,42],[-124,32]]]}"
+}
+
+### Soft-delete state
+DELETE {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}
+Authorization: Bearer {{token}}
+
+### ---------------------------------------------------------------------------
+### Geo: Counties
+### ---------------------------------------------------------------------------
+
+### List counties for a state
+GET {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}/counties
+Authorization: Bearer {{token}}
+
+### Get county by id
+GET {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}
+Authorization: Bearer {{token}}
+
+### Create county
+POST {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}/counties
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Example County",
+  "fips": "06999"
+}
+
+### Update county
+PUT {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Renamed County",
+  "fips": "06999"
+}
+
+### Set county geometry
+PUT {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}/geometry
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-122.5,37.7],[-122.3,37.7],[-122.3,37.9],[-122.5,37.9],[-122.5,37.7]]]}"
+}
+
+### Soft-delete county
+DELETE {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}
+Authorization: Bearer {{token}}
+
+### ---------------------------------------------------------------------------
+### Geo: Cache files (served as static GeoJSON, no auth)
+### Layout:
+###   /geo-cache/countries/{id}.geojson           single country feature
+###   /geo-cache/states/{id}.geojson              single state feature
+###   /geo-cache/counties/{id}.geojson            single county feature
+###   /geo-cache/states/bundle-{countryId}.geojson    FeatureCollection of states
+###   /geo-cache/counties/bundle-{stateId}.geojson    FeatureCollection of counties
+### ---------------------------------------------------------------------------
+
+### Fetch the USA -> states bundle
+GET {{DataHub.Api_HostAddress}}/geo-cache/states/bundle-{{countryId}}.geojson
+
+### Fetch a state -> counties bundle
+GET {{DataHub.Api_HostAddress}}/geo-cache/counties/bundle-{stateId}.geojson
+
+### Fetch a single state feature
+GET {{DataHub.Api_HostAddress}}/geo-cache/states/{stateId}.geojson
+
 ###

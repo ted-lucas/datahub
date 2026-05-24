@@ -6,4 +6,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- NetTopologySuite is a pure .NET library; we reference it from Core
+         so domain entities can expose Geometry properties without leaking
+         persistence concerns. EF Core's spatial provider lives in Infrastructure. -->
+    <PackageReference Include="NetTopologySuite" Version="2.6.0" />
+  </ItemGroup>
+
 </Project>

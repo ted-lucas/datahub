@@ -17,7 +17,7 @@ public static class InfrastructureServiceRegistration
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
 
         services.AddDbContext<DataHubDbContext>(opt =>
-            opt.UseSqlServer(connectionString));
+            opt.UseSqlServer(connectionString, sql => sql.UseNetTopologySuite()));
 
         services.Configure<JwtOptions>(config.GetSection("Jwt"));
 
@@ -26,6 +26,8 @@ public static class InfrastructureServiceRegistration
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<ISportsService, SportsService>();
+        services.AddScoped<IGeoService, GeoService>();
+        services.AddSingleton<IGeoCacheWriter, GeoCacheWriter>();
 
         return services;
     }
