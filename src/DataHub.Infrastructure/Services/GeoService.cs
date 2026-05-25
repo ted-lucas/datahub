@@ -2,24 +2,22 @@ using DataHub.Core.DTOs.Geo;
 using DataHub.Core.Entities.Geo;
 using DataHub.Core.Interfaces;
 using DataHub.Infrastructure.Data;
+using DataHub.Infrastructure.Seeding;
 using Microsoft.EntityFrameworkCore;
-using NetTopologySuite.Geometries;
-using NetTopologySuite.IO;
 
 namespace DataHub.Infrastructure.Services;
 
+/// <summary>
+/// Read-mostly reference data for the map module. No geometry — the frontend
+/// renders polygons from static GeoJSON assets and joins to these rows by FIPS.
+/// </summary>
 public class GeoService : IGeoService
 {
     private readonly DataHubDbContext _db;
-    private readonly IGeoCacheWriter _cache;
 
-    // SRID 4326 = WGS84 (lat/lon). SQL Server geography requires a valid SRID.
-    private const int Wgs84 = 4326;
-
-    public GeoService(DataHubDbContext db, IGeoCacheWriter cache)
+    public GeoService(DataHubDbContext db)
     {
         _db = db;
-        _cache = cache;
     }
 
     // ------------------------------------------------------------------ Countries
@@ -29,7 +27,7 @@ public class GeoService : IGeoService
         var q = _db.Countries.AsNoTracking();
         if (!includeInactive) q = q.Where(c => c.IsActive);
         return await q.OrderBy(c => c.Name)
-            .Select(c => new CountryDto(c.Id, c.Iso2, c.Iso3, c.Name, c.Geometry != null, c.IsActive, c.UpdatedAt))
+            .Select(c => new CountryDto(c.Id, c.Iso2, c.Iso3, c.Name, c.IsActive, c.UpdatedAt))
             .ToListAsync(ct);
     }
 
@@ -73,16 +71,6 @@ public class GeoService : IGeoService
         return true;
     }
 
-    public async Task<bool> SetCountryGeometryAsync(Guid id, string geoJson, CancellationToken ct = default)
-    {
-        var c = await _db.Countries.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (c is null) return false;
-        c.Geometry = ParseGeometry(geoJson);
-        await _db.SaveChangesAsync(ct);
-        await _cache.WriteCountryAsync(id, geoJson, ct);
-        return true;
-    }
-
     // ------------------------------------------------------------------ States
 
     public async Task<IReadOnlyList<StateDto>> ListStatesAsync(Guid countryId, bool includeInactive = false, CancellationToken ct = default)
@@ -90,8 +78,18 @@ public class GeoService : IGeoService
         var q = _db.States.AsNoTracking().Where(s => s.CountryId == countryId);
         if (!includeInactive) q = q.Where(s => s.IsActive);
         return await q.OrderBy(s => s.Name)
-            .Select(s => new StateDto(s.Id, s.CountryId, s.Code, s.Name, s.Fips, s.Geometry != null, s.IsActive, s.UpdatedAt))
+            .Select(s => new StateDto(s.Id, s.CountryId, s.Code, s.Name, s.Fips, s.IsActive, s.UpdatedAt))
             .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<StateDto>> ListStatesByCountryIso2Async(string iso2, bool includeInactive = false, CancellationToken ct = default)
+    {
+        var q = from s in _db.States.AsNoTracking()
+                join c in _db.Countries.AsNoTracking() on s.CountryId equals c.Id
+                where c.Iso2 == iso2 && (includeInactive || s.IsActive)
+                orderby s.Name
+                select new StateDto(s.Id, s.CountryId, s.Code, s.Name, s.Fips, s.IsActive, s.UpdatedAt);
+        return await q.ToListAsync(ct);
     }
 
     public async Task<StateDto?> GetStateAsync(Guid id, CancellationToken ct = default)
@@ -128,16 +126,6 @@ public class GeoService : IGeoService
         return true;
     }
 
-    public async Task<bool> SetStateGeometryAsync(Guid id, string geoJson, CancellationToken ct = default)
-    {
-        var s = await _db.States.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (s is null) return false;
-        s.Geometry = ParseGeometry(geoJson);
-        await _db.SaveChangesAsync(ct);
-        await _cache.WriteStateAsync(id, geoJson, ct);
-        return true;
-    }
-
     // ------------------------------------------------------------------ Counties
 
     public async Task<IReadOnlyList<CountyDto>> ListCountiesAsync(Guid stateId, bool includeInactive = false, CancellationToken ct = default)
@@ -145,8 +133,18 @@ public class GeoService : IGeoService
         var q = _db.Counties.AsNoTracking().Where(c => c.StateId == stateId);
         if (!includeInactive) q = q.Where(c => c.IsActive);
         return await q.OrderBy(c => c.Name)
-            .Select(c => new CountyDto(c.Id, c.StateId, c.Name, c.Fips, c.Geometry != null, c.IsActive, c.UpdatedAt))
+            .Select(c => new CountyDto(c.Id, c.StateId, c.Name, c.Fips, c.IsActive, c.UpdatedAt))
             .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<CountyDto>> ListCountiesByStateFipsAsync(string stateFips, bool includeInactive = false, CancellationToken ct = default)
+    {
+        var q = from c in _db.Counties.AsNoTracking()
+                join s in _db.States.AsNoTracking() on c.StateId equals s.Id
+                where s.Fips == stateFips && (includeInactive || c.IsActive)
+                orderby c.Name
+                select new CountyDto(c.Id, c.StateId, c.Name, c.Fips, c.IsActive, c.UpdatedAt);
+        return await q.ToListAsync(ct);
     }
 
     public async Task<CountyDto?> GetCountyAsync(Guid id, CancellationToken ct = default)
@@ -182,94 +180,201 @@ public class GeoService : IGeoService
         return true;
     }
 
-    public async Task<bool> SetCountyGeometryAsync(Guid id, string geoJson, CancellationToken ct = default)
+    // ------------------------------------------------------------------ Metrics
+
+    /// <summary>
+    /// Choropleth data source. Returns one row per region keyed by FIPS (state/county)
+    /// or ISO-2 (country). See <see cref="GeoMetricKind"/> for what's counted.
+    /// </summary>
+    public async Task<IReadOnlyList<GeoMetricDto>> GetMetricsAsync(
+        GeoMetricsLevel level,
+        string? parentFips,
+        GeoMetricKind kind = GeoMetricKind.Regions,
+        CancellationToken ct = default)
     {
-        var c = await _db.Counties.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (c is null) return false;
-        c.Geometry = ParseGeometry(geoJson);
-        await _db.SaveChangesAsync(ct);
-        await _cache.WriteCountyAsync(id, geoJson, ct);
-        return true;
+        return kind switch
+        {
+            GeoMetricKind.Regions => await RegionsMetricsAsync(level, parentFips, ct),
+            GeoMetricKind.Teams => await TeamsMetricsAsync(level, parentFips, ct),
+            GeoMetricKind.Venues => await VenuesMetricsAsync(level, parentFips, ct),
+            _ => Array.Empty<GeoMetricDto>(),
+        };
+    }
+
+    // Original placeholder: counts of geographic children. Always usable, even
+    // with zero domain data loaded.
+    private async Task<IReadOnlyList<GeoMetricDto>> RegionsMetricsAsync(
+        GeoMetricsLevel level, string? parentFips, CancellationToken ct)
+    {
+        switch (level)
+        {
+            case GeoMetricsLevel.Country:
+                return await _db.Countries.AsNoTracking()
+                    .Where(c => c.IsActive)
+                    .Select(c => new GeoMetricDto(c.Iso2, c.Name, c.States.Count(s => s.IsActive)))
+                    .ToListAsync(ct);
+
+            case GeoMetricsLevel.State:
+                return await _db.States.AsNoTracking()
+                    .Where(s => s.IsActive && s.Fips != null)
+                    .Select(s => new GeoMetricDto(s.Fips!, s.Name, s.Counties.Count(c => c.IsActive)))
+                    .ToListAsync(ct);
+
+            case GeoMetricsLevel.County:
+                var q = _db.Counties.AsNoTracking().Where(c => c.IsActive && c.Fips != null);
+                if (!string.IsNullOrWhiteSpace(parentFips))
+                    q = q.Where(c => c.Fips!.StartsWith(parentFips));
+                // Count = 1 so all counties have a non-zero shade until real metrics arrive.
+                return await q.Select(c => new GeoMetricDto(c.Fips!, c.Name, 1L)).ToListAsync(ct);
+
+            default:
+                return Array.Empty<GeoMetricDto>();
+        }
+    }
+
+    // Sports.Team counts. Keyed at country level by `Team.Country` (matched
+    // loosely against ISO-2 *and* legacy ISO-3 forms like "USA"), and at state
+    // level by `Team.State` postal -> 2-digit FIPS via the seeded lookup.
+    private async Task<IReadOnlyList<GeoMetricDto>> TeamsMetricsAsync(
+        GeoMetricsLevel level, string? parentFips, CancellationToken ct)
+    {
+        if (level == GeoMetricsLevel.County)
+        {
+            // Team has no county column; degrade gracefully so the map still paints.
+            return await RegionsMetricsAsync(level, parentFips, ct);
+        }
+
+        if (level == GeoMetricsLevel.Country)
+        {
+            var grouped = await _db.Teams.AsNoTracking()
+                .Where(t => t.IsActive && t.Country != null)
+                .GroupBy(t => t.Country!)
+                .Select(g => new { Country = g.Key, Count = g.LongCount() })
+                .ToListAsync(ct);
+
+            // Normalize a few common encodings of the same country to a single ISO-2 row.
+            return CollapseByIso2(grouped.Select(x => (x.Country, x.Count)));
+        }
+
+        // State level: optionally narrow by parent country (ISO-2 like "US").
+        var teamsQ = _db.Teams.AsNoTracking()
+            .Where(t => t.IsActive && t.State != null);
+        if (IsUsaParent(parentFips))
+            teamsQ = teamsQ.Where(t => t.Country == "US" || t.Country == "USA");
+
+        var stateRows = await teamsQ
+            .GroupBy(t => t.State!)
+            .Select(g => new { Postal = g.Key, Count = g.LongCount() })
+            .ToListAsync(ct);
+
+        return ToStateMetrics(stateRows.Select(r => (r.Postal, r.Count)));
+    }
+
+    // Sports.Venue counts. Same join shape as Teams.
+    private async Task<IReadOnlyList<GeoMetricDto>> VenuesMetricsAsync(
+        GeoMetricsLevel level, string? parentFips, CancellationToken ct)
+    {
+        if (level == GeoMetricsLevel.County)
+            return await RegionsMetricsAsync(level, parentFips, ct);
+
+        if (level == GeoMetricsLevel.Country)
+        {
+            var grouped = await _db.Venues.AsNoTracking()
+                .Where(v => v.IsActive && v.Country != null)
+                .GroupBy(v => v.Country!)
+                .Select(g => new { Country = g.Key, Count = g.LongCount() })
+                .ToListAsync(ct);
+
+            return CollapseByIso2(grouped.Select(x => (x.Country, x.Count)));
+        }
+
+        var venuesQ = _db.Venues.AsNoTracking()
+            .Where(v => v.IsActive && v.State != null);
+        if (IsUsaParent(parentFips))
+            venuesQ = venuesQ.Where(v => v.Country == "US" || v.Country == "USA");
+
+        var stateRows = await venuesQ
+            .GroupBy(v => v.State!)
+            .Select(g => new { Postal = g.Key, Count = g.LongCount() })
+            .ToListAsync(ct);
+
+        return ToStateMetrics(stateRows.Select(r => (r.Postal, r.Count)));
+    }
+
+    // ── metric helpers ─────────────────────────────────────────────────────
+
+    private static bool IsUsaParent(string? parent) =>
+        !string.IsNullOrWhiteSpace(parent) &&
+        (parent.Equals("US", StringComparison.OrdinalIgnoreCase) ||
+         parent.Equals("USA", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Map raw <c>(Country string, count)</c> rows to ISO-2-keyed metrics, merging
+    /// duplicates that differ only by ISO-2 vs ISO-3 encoding. Names come from the
+    /// Countries table when we have a row; otherwise we pass the raw value through.
+    /// </summary>
+    private IReadOnlyList<GeoMetricDto> CollapseByIso2(IEnumerable<(string Country, long Count)> rows)
+    {
+        // Build an in-memory country lookup once. Small table (Phase 2 = a handful of rows).
+        var countries = _db.Countries.AsNoTracking()
+            .Where(c => c.IsActive)
+            .Select(c => new { c.Iso2, c.Iso3, c.Name })
+            .ToList();
+
+        var byIso2 = countries.ToDictionary(c => c.Iso2.ToUpperInvariant(), c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var iso3ToIso2 = countries
+            .Where(c => !string.IsNullOrEmpty(c.Iso3))
+            .GroupBy(c => c.Iso3.ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => g.First().Iso2.ToUpperInvariant(), StringComparer.OrdinalIgnoreCase);
+
+        var merged = new Dictionary<string, (string Name, long Count)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (raw, count) in rows)
+        {
+            var key = raw.ToUpperInvariant();
+            if (iso3ToIso2.TryGetValue(key, out var iso2)) key = iso2;
+
+            var name = byIso2.TryGetValue(key, out var n) ? n : raw;
+            if (merged.TryGetValue(key, out var existing))
+                merged[key] = (existing.Name, existing.Count + count);
+            else
+                merged[key] = (name, count);
+        }
+
+        return merged
+            .Select(kv => new GeoMetricDto(kv.Key, kv.Value.Name, kv.Value.Count))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Map raw <c>(state postal, count)</c> rows to FIPS-keyed metrics using
+    /// <see cref="UsStates.FipsByPostal"/>. Unknown postals are silently dropped
+    /// (they wouldn't render on the map anyway).
+    /// </summary>
+    private static IReadOnlyList<GeoMetricDto> ToStateMetrics(IEnumerable<(string Postal, long Count)> rows)
+    {
+        var merged = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (postal, count) in rows)
+        {
+            if (postal is null) continue;
+            if (!UsStates.FipsByPostal.TryGetValue(postal.Trim(), out var fips)) continue;
+            merged[fips] = merged.TryGetValue(fips, out var existing) ? existing + count : count;
+        }
+        return merged
+            .Select(kv => new GeoMetricDto(
+                kv.Key,
+                UsStates.ByFips.TryGetValue(kv.Key, out var meta) ? meta.Name : kv.Key,
+                kv.Value))
+            .ToList();
     }
 
     // ------------------------------------------------------------------ helpers
 
-    private static Geometry ParseGeometry(string geoJson)
-    {
-        if (string.IsNullOrWhiteSpace(geoJson))
-            throw new ArgumentException("GeoJSON payload is empty.", nameof(geoJson));
-
-        var reader = new GeoJsonReader();
-        var geom = reader.Read<Geometry>(geoJson)
-            ?? throw new ArgumentException("Failed to parse GeoJSON geometry.", nameof(geoJson));
-        geom.SRID = Wgs84;
-
-        // SQL Server `geography` requires outer rings counter-clockwise (left-hand rule).
-        // GeoJSON files are commonly clockwise; flip them so SQL Server doesn't interpret
-        // each polygon as "everything except this region" (which then fails validation).
-        return NormalizePolygonOrientation(geom);
-    }
-
-    private static Geometry NormalizePolygonOrientation(Geometry geom)
-    {
-        switch (geom)
-        {
-            case Polygon poly:
-                return EnsureCcw(poly);
-            case MultiPolygon mp:
-                var polys = new Polygon[mp.NumGeometries];
-                for (var i = 0; i < mp.NumGeometries; i++)
-                    polys[i] = EnsureCcw((Polygon)mp.GetGeometryN(i));
-                var result = new MultiPolygon(polys) { SRID = mp.SRID };
-                return result;
-            default:
-                return geom;
-        }
-    }
-
-    private static Polygon EnsureCcw(Polygon poly)
-    {
-        var shell = (LinearRing)poly.ExteriorRing;
-        if (!IsCounterClockwise(shell)) shell = (LinearRing)shell.Reverse();
-
-        var holes = new LinearRing[poly.NumInteriorRings];
-        for (var i = 0; i < poly.NumInteriorRings; i++)
-        {
-            var hole = (LinearRing)poly.GetInteriorRingN(i);
-            // Holes must be the opposite orientation of the shell (so: clockwise).
-            if (IsCounterClockwise(hole)) hole = (LinearRing)hole.Reverse();
-            holes[i] = hole;
-        }
-
-        var fixedPoly = new Polygon(shell, holes) { SRID = poly.SRID };
-        return fixedPoly;
-    }
-
-    /// <summary>
-    /// Shoelace-based CCW test matching SQL Server's <c>geography</c> shell convention.
-    /// See <c>GeoSeeder.IsCounterClockwise</c> for the longer explanation.
-    /// </summary>
-    private static bool IsCounterClockwise(LinearRing ring)
-    {
-        var coords = ring.CoordinateSequence;
-        double sum = 0;
-        for (var i = 0; i < coords.Count - 1; i++)
-        {
-            var x1 = coords.GetX(i);
-            var y1 = coords.GetY(i);
-            var x2 = coords.GetX(i + 1);
-            var y2 = coords.GetY(i + 1);
-            sum += (x2 - x1) * (y2 + y1);
-        }
-        return sum < 0;
-    }
-
     private static CountryDto ToDto(Country c) =>
-        new(c.Id, c.Iso2, c.Iso3, c.Name, c.Geometry != null, c.IsActive, c.UpdatedAt);
+        new(c.Id, c.Iso2, c.Iso3, c.Name, c.IsActive, c.UpdatedAt);
 
     private static StateDto ToDto(State s) =>
-        new(s.Id, s.CountryId, s.Code, s.Name, s.Fips, s.Geometry != null, s.IsActive, s.UpdatedAt);
+        new(s.Id, s.CountryId, s.Code, s.Name, s.Fips, s.IsActive, s.UpdatedAt);
 
     private static CountyDto ToDto(County c) =>
-        new(c.Id, c.StateId, c.Name, c.Fips, c.Geometry != null, c.IsActive, c.UpdatedAt);
+        new(c.Id, c.StateId, c.Name, c.Fips, c.IsActive, c.UpdatedAt);
 }

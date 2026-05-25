@@ -1,17 +1,14 @@
 namespace DataHub.Core.DTOs.Geo;
 
-// Notes:
-// - List/detail DTOs intentionally omit raw geometry. The frontend fetches geometry
-//   from cached GeoJSON files served under /geo-cache/, keyed by Id + UpdatedAt.
-// - Geometry write endpoints accept GeoJSON as a string (the service parses it
-//   via NetTopologySuite's GeoJsonReader, then writes the cache file).
+// Boundaries are NOT stored in the DB or returned by these DTOs. The frontend
+// renders polygons from static GeoJSON assets under /geo/* and joins them to
+// these rows by ISO/FIPS code.
 
 public record CountryDto(
     Guid Id,
     string Iso2,
     string? Iso3,
     string Name,
-    bool HasGeometry,
     bool IsActive,
     DateTime UpdatedAt);
 
@@ -21,7 +18,6 @@ public record StateDto(
     string Code,
     string Name,
     string? Fips,
-    bool HasGeometry,
     bool IsActive,
     DateTime UpdatedAt);
 
@@ -30,7 +26,6 @@ public record CountyDto(
     Guid StateId,
     string Name,
     string? Fips,
-    bool HasGeometry,
     bool IsActive,
     DateTime UpdatedAt);
 
@@ -44,7 +39,7 @@ public record CreateCountyRequest(string Name, string? Fips);
 public record UpdateCountyRequest(string Name, string? Fips);
 
 /// <summary>
-/// Replaces the geometry on a geographic entity. <c>GeoJson</c> must be a valid
-/// GeoJSON <c>Geometry</c> object (not a Feature or FeatureCollection).
+/// One row in a choropleth payload. Joined to GeoJSON features on the frontend
+/// by <c>Fips</c> (or ISO-2 for country-level metrics).
 /// </summary>
-public record SetGeometryRequest(string GeoJson);
+public record GeoMetricDto(string Fips, string Name, long Count);

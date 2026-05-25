@@ -1,9 +1,8 @@
-using NetTopologySuite.Geometries;
-
 namespace DataHub.Core.Entities.Geo;
 
 /// <summary>
 /// A first-level administrative subdivision (US state, Canadian province, etc.).
+/// Geometry is rendered from static GeoJSON assets joined by FIPS / postal code.
 /// </summary>
 public class State : AuditableEntity
 {
@@ -16,11 +15,8 @@ public class State : AuditableEntity
     /// <summary>Display name, e.g. "California".</summary>
     public required string Name { get; set; }
 
-    /// <summary>FIPS code (US states only), e.g. "06" for California.</summary>
+    /// <summary>FIPS code (US states only), e.g. "06" for California. Canonical join key to GeoJSON.</summary>
     public string? Fips { get; set; }
-
-    /// <summary>State polygon / multipolygon. May be null if not yet loaded.</summary>
-    public Geometry? Geometry { get; set; }
 
     public ICollection<County> Counties { get; set; } = new List<County>();
 }

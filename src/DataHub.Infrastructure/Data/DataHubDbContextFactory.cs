@@ -34,7 +34,7 @@ public class DataHubDbContextFactory : IDesignTimeDbContextFactory<DataHubDbCont
                 "ConnectionStrings:DefaultConnection not found. Looked in " + basePath);
 
         var options = new DbContextOptionsBuilder<DataHubDbContext>()
-            .UseSqlServer(connectionString, sql => sql.UseNetTopologySuite())
+            .UseSqlServer(connectionString)
             .Options;
 
         return new DataHubDbContext(options, new NullCurrentUser());

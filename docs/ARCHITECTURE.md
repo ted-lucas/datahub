@@ -232,23 +232,24 @@ See §12 for the full Sports domain model. All Sports entities (`Sport`, `SportL
 - `POST   /api/geo/countries`                                 create country
 - `PUT    /api/geo/countries/{id}`                            update country
 - `DELETE /api/geo/countries/{id}`                            soft-delete
-- `PUT    /api/geo/countries/{id}/geometry`                   set geometry from GeoJSON
-- `GET    /api/geo/countries/{countryId}/states`              list states in a country
+- `GET    /api/geo/countries/{countryId}/states`              list states in a country (by id)
+- `GET    /api/geo/states?country={iso2}`                     list states in a country (by ISO-2, used by the map UI)
 - `POST   /api/geo/countries/{countryId}/states`              create state under a country
-- `GET    /api/geo/states/{id}`, `PUT`, `DELETE`, `PUT {id}/geometry`
-- `GET    /api/geo/states/{stateId}/counties`                 list counties in a state
+- `GET    /api/geo/states/{id}`, `PUT`, `DELETE`
+- `GET    /api/geo/states/{stateId}/counties`                 list counties in a state (by id)
+- `GET    /api/geo/counties?state={fips}`                     list counties in a state (by state FIPS, used by the map UI)
 - `POST   /api/geo/states/{stateId}/counties`                 create county under a state
-- `GET    /api/geo/counties/{id}`, `PUT`, `DELETE`, `PUT {id}/geometry`
+- `GET    /api/geo/counties/{id}`, `PUT`, `DELETE`
+- `GET    /api/geo/metrics?level={country|state|county}&parent={iso2|fips}&metric={regions|teams|venues}`   choropleth feed: `[{ fips, name, count }]`. `metric` defaults to `regions` (counts of geographic children); `teams` / `venues` aggregate the Sports domain via `Team.State` / `Venue.State` postal → FIPS lookup. Teams/Venues fall back to `regions` at county level (those entities don't store a county yet).
 
-#### Geo cache (static, no auth)
-Pre-rendered GeoJSON files emitted to `wwwroot/geo-cache/` and served as `application/geo+json` with long-cache headers (`max-age=31536000, immutable`). The frontend reads geometry from here rather than from the API DTOs (which omit raw geometry to keep responses small).
+Geometry is **not** stored in the database (see §12.2). The map UI loads boundary geometry from the static asset endpoints below and joins it to `/api/geo/metrics` by FIPS / ISO-2.
 
+#### Geo static assets (no auth)
+Served by ASP.NET Core static-file middleware from `wwwroot/geo/` with `Cache-Control: public, max-age=31536000, immutable` and `Content-Type: application/geo+json` for `.geojson`.
 ```
-/geo-cache/countries/{id}.geojson              single country feature
-/geo-cache/states/{id}.geojson                 single state feature
-/geo-cache/counties/{id}.geojson               single county feature
-/geo-cache/states/bundle-{countryId}.geojson   FeatureCollection of all states in a country
-/geo-cache/counties/bundle-{stateId}.geojson   FeatureCollection of all counties in a state
+/geo/countries-110m.topo.json   world-atlas countries TopoJSON (~108 KB)
+/geo/us-states-10m.topo.json    us-atlas US states TopoJSON (~115 KB)
+/geo/us-counties-10m.topo.json  us-atlas US counties TopoJSON (~842 KB)
 ```
 
 > See `src/DataHub.Api/DataHub.Api.http` for runnable request examples.
@@ -377,6 +378,12 @@ Open http://localhost:5173 and log in with the seeded admin.
   NTS's `UnaryUnionOp` chokes on coordinates near the antimeridian (American Samoa territory bleed, Aleutians). SQL Server's planetary union handles these natively. `MakeValid()` on each input county defends against `GeographyUnionAggregate` rejecting any individual invalid geometry. Single SQL statement updates all 51 states.
 - **2026-05-23 — Geo cache: per-entity GeoJSON files + per-parent bundles served as static assets from `wwwroot/geo-cache/`.**
   API DTOs intentionally omit raw geometry to keep responses small; the frontend reads geometry from these cache files instead. Layout: `countries/{id}.geojson`, `states/{id}.geojson`, `counties/{id}.geojson`, plus `states/bundle-{countryId}.geojson` and `counties/bundle-{stateId}.geojson`. Served with `Content-Type: application/geo+json` and `Cache-Control: public, max-age=31536000, immutable`. Cache root configurable via `Geo:CacheRoot`; defaults to `<contentRoot>/wwwroot/geo-cache`. Cache writer is invoked from `GeoService` on every create/update/setGeometry call.
+- **2026-05-24 — Geo module radically simplified: NTS, `geography` columns, the per-entity cache writer, `set-geometry` endpoints, and the seed-time county→state polygon dissolve are all removed at runtime.** (Supersedes the dual-storage decision of 2026-05-22 and every geometry-pipeline decision of 2026-05-23.)
+  Rationale: the previous design solved problems we don't have yet (server-side spatial queries) at the cost of one of the trickiest ingest pipelines in the codebase (SQL Server vs. NTS orientation drift, antimeridian unions, raw-SQL fallbacks). The map only ever needed *boundaries* (which never change) and *metrics* (which do). So we ship the boundaries as immutable static files under `wwwroot/geo/` (world-atlas + us-atlas, ~3.8 MB total), expose a single `GET /api/geo/metrics?level=...&parent=...` choropleth feed, and join them client-side by FIPS / ISO-2. The `Microsoft.EntityFrameworkCore.SqlServer.NetTopologySuite` NuGet stays in the csproj only because the original `AddGeoModule` migration's Designer file references `NetTopologySuite.Geometries.Geometry`; the runtime code path no longer touches NTS. A new `DropGeoGeometryColumns` migration removes the three `geography` columns from existing databases.
+- **2026-05-24 — Map library reversed: `maplibre-gl` + `react-map-gl` + `topojson-client` instead of `react-leaflet` + Leaflet.** (Supersedes the map-library decision of 2026-05-22.)
+  MapLibre gives us data-driven styling (`interpolate` expressions on a `metric` feature property), zoom-driven layer LOD (per-layer `minzoom`/`maxzoom`), and feature-state hover without a re-render — all things we were going to fight Leaflet for once the choropleth grew beyond trivial. We deliberately ship *no* external basemap (no Mapbox / MapTiler / OSM tile server, no API keys, no rate limits): the style is just a flat background plus three boundary layers, which is exactly what a choropleth-first product needs. A real raster basemap can be dropped in later by adding one `raster` source to `mapStyle.ts`.
+- **2026-05-24 — `/api/geo/metrics` is the single choropleth feed; what's counted is selected by a `metric` query param (`regions` | `teams` | `venues`), not by separate endpoints.**
+  Keeps the frontend join logic identical across metrics — fetch a flat `[{ fips, name, count }]`, merge by `joinKey`, let MapLibre's data-driven `fill-color` repaint. The state-level join for Teams/Venues relies on the seeded `UsStates.FipsByPostal` reverse lookup (postal "MO" → FIPS "29"), so we promoted that table from `internal` to `public`. Country-level joins for Teams/Venues normalize ISO-3 ("USA") → ISO-2 ("US") via the Countries table so the choropleth doesn't double-count countries that show up in two encodings. Teams and Venues currently have no county column; calling them at county level transparently falls back to the `regions` placeholder rather than returning an empty FeatureCollection. New metrics (e.g. `events`, `players`) add a single switch arm — boundaries, controller, and frontend picker need zero changes.
 
 ---
 
@@ -489,34 +496,37 @@ A separate taxonomy supports the map-centric UI. **Scope is intentionally US-onl
 
 | Table | Key fields | Notes |
 |-------|-----------|-------|
-| `Countries` | Id, IsoAlpha2 (unique), IsoAlpha3, Name, Geometry (`geography`, nullable), GeoJsonRef | Seeded with USA only for Phase 2 |
-| `StatesProvinces` | Id, CountryId (FK), Code (e.g. "MO"), Name, Geometry (`geography`, nullable), GeoJsonRef | 50 US states + DC |
-| `Counties` | Id, StateId (FK), FipsCode (unique), Name, Geometry (`geography`, nullable), GeoJsonRef | ~3,143 US counties; FIPS is the canonical join key |
+| `Countries` | Id, IsoAlpha2 (unique), IsoAlpha3, Name | Seeded with USA only for Phase 2 |
+| `StatesProvinces` | Id, CountryId (FK), Code (e.g. "MO"), Name, Fips (unique-ish, 2-digit) | 50 US states + DC; FIPS is the canonical join key to static boundary files |
+| `Counties` | Id, StateId (FK), Fips (unique, 5-digit), Name | ~3,143 US counties; FIPS joins to static boundary files and to choropleth metrics |
 
-**Dual geometry storage** (decision §9, 2026-05-22):
+**Boundary geometry is not in the database** (revised 2026-05-24, supersedes the dual-storage decision of 2026-05-22). Boundaries are shipped as static asset files under `wwwroot/geo/`:
 
-- **`Geometry` column** (SQL Server `geography`) — for future server-side spatial queries (contains-point, within-radius, intersect-with-polygon). Requires `Microsoft.EntityFrameworkCore.SqlServer.NetTopologySuite`.
-- **`GeoJsonRef`** — relative path/URL to a pre-simplified GeoJSON/TopoJSON file served as a static asset for fast frontend rendering.
+| File | Format | Source | Size |
+|------|--------|--------|------|
+| `countries-110m.topo.json` | TopoJSON | world-atlas | ~108 KB |
+| `us-states-10m.topo.json`  | TopoJSON | us-atlas | ~115 KB |
+| `us-counties-10m.topo.json` | TopoJSON | us-atlas | ~842 KB |
 
-The frontend uses `GeoJsonRef`; the API may consult `Geometry` for spatial operations later.
+Served by ASP.NET Core static-file middleware with `Cache-Control: public, max-age=31536000, immutable` and `Content-Type: application/geo+json` for `.geojson`. The frontend (`src/datahub-ui/src/features/map/`) loads them via `fetch` + `topojson-client`, then joins to `/api/geo/metrics` by FIPS / ISO-2.
 
-#### 12.2.1 Geometry pipeline
+#### 12.2.1 How the join works
 
-| Step | Source | Tool / target |
-|------|--------|---------------|
-| Country (USA) | Natural Earth 1:50m admin-0 | Convert to GeoJSON, simplify to ~50KB |
-| States (50 + DC) | US Census TIGER/Line (`tl_*_us_state.shp`) | Convert with `ogr2ogr`, simplify to ~50KB total |
-| Counties (~3,143) | US Census TIGER/Line (`tl_*_us_county.shp`) | Convert, simplify per-state to ~5KB / county |
+- **Country level** — joins on UN M49 numeric code (the `id` field in world-atlas) or ISO-2 once countries beyond the US are introduced.
+- **State level** — joins on 2-digit state FIPS (`States.Fips` ↔ us-atlas state `id`).
+- **County level** — joins on 5-digit county FIPS (`Counties.Fips` ↔ us-atlas county `id`).
 
-- Files land in `src/datahub-ui/public/geo/{country,state,county}/<id>.geojson` (or are served from `GET /api/geo/geometry/...` with an ETag).
-- The same source data is imported into the DB `Geometry` columns by a one-time seed (or migration data step).
-- Simplification target balances size and visual fidelity. Tune later.
+This keeps the API DTOs tiny (no geometry payload), keeps geometry assets cacheable forever (boundaries don't change), and lets the choropleth recolor instantly when metrics change.
 
 #### 12.2.2 Joining sports to geography
 
 - `Venues.Lat/Lon` → point overlays on the map.
-- `Teams.State`, `Teams.City` → choropleth aggregation by state / county.
+- `Teams.State`, `Teams.City` → choropleth aggregation by state / county via FIPS lookup.
 - All overlays respect the active time slider window (§12.4).
+
+#### 12.2.3 International expansion
+
+When non-US data lands, drop a new static file into `wwwroot/geo/` (e.g. `ca-provinces.geojson`), extend the `LEVELS` config in `src/datahub-ui/src/features/map/layers.ts`, and ensure the relevant `Country` row exists with the right ISO codes. No schema change, no migration.
 
 ---
 
@@ -526,20 +536,22 @@ Every dataset (Sports first, others to follow) is viewable through three interch
 
 | Mode | Purpose | Library |
 |------|---------|---------|
-| **Map** | *Primary* view. Choropleths + point overlays + drill-down. | `react-leaflet` + Leaflet, OpenStreetMap tiles |
+| **Map** | *Primary* view. Choropleths + point overlays + zoom-driven drill-down. | `maplibre-gl` + `react-map-gl` + `topojson-client`; no external basemap by default |
 | **Grid** | Power-user tabular browse, sort, filter, export. | MUI X DataGrid (Community) |
 | **Dashboard** | Aggregated KPIs, charts, breakdowns. | Recharts (or Apache ECharts if needs grow) |
 
 #### 12.3.1 Map drill-down
 
-The map operates in four scopes, switchable via a control:
+Drill-down is **zoom-driven** rather than mode-switched: each boundary level (Country / State / County) is a separate MapLibre layer with `minzoom`/`maxzoom` bounds (see `src/datahub-ui/src/features/map/layers.ts`). As the user zooms in, the layer swap happens automatically; clicking a feature flies the camera into that level's typical view zoom.
 
-1. **World** — overview (Phase 2: only US is highlighted/clickable; rest of world is greyed)
-2. **Country (US)** — US choropleth by state
-3. **State** — single-state view, choropleth by county
-4. **County** — single-county view, point-level data (venues, events)
+Conceptual scopes:
 
-Drill-down is bidirectional: click a state in Country view to enter State view; a breadcrumb (`USA › Missouri › St. Louis County`) is always visible and clickable.
+1. **World** — country choropleth (zoom 0–4)
+2. **Country (US)** — state choropleth (zoom 3–7)
+3. **State** — county choropleth (zoom 6+)
+4. **County** — point-level overlays (venues, events) at the deepest zoom
+
+A breadcrumb (`USA › Missouri › St. Louis County`) is rendered alongside the map and reflects whatever feature is hovered or last clicked; clicking a breadcrumb crumb flies back out to that level.
 
 #### 12.3.2 Layout sketch
 
@@ -646,8 +658,9 @@ GET    /api/venues?bbox=…&from=…&to=…                                     
 # Geography
 GET    /api/geo/countries                       (geo:read)
 GET    /api/geo/states?country=US               (geo:read)
-GET    /api/geo/counties?state=MO               (geo:read)
-GET    /api/geo/geometry/{level}/{id}           (geo:read)  -- returns simplified GeoJSON, ETag-cached
+GET    /api/geo/counties?state=06               (geo:read)   -- state FIPS
+GET    /api/geo/metrics?level=...&parent=...    (geo:read)   -- choropleth feed
+GET    /geo/{file}                              (no auth)    -- static boundary files
 ```
 
 All collection endpoints accept `from` / `to` query params honoring the active time window. All write endpoints validate that parent FKs exist and that `(SportId, Name)`-style uniqueness holds.
@@ -657,7 +670,7 @@ All collection endpoints accept `from` / `to` query params honoring the active t
 ### 12.8 Build Order (suggested, not binding)
 
 1. **Backend taxonomy:** `Sports`, `SportLevels`, `Leagues`, `Conferences`, `Teams`, `Venues` entities + EF configurations + migration + CRUD endpoints + new permissions in seeder.
-2. **Backend geography:** `Countries`, `StatesProvinces`, `Counties` entities with both `Geometry` (NetTopologySuite) and `GeoJsonRef`; one-time seed that imports US data and emits GeoJSON files to `src/datahub-ui/public/geo/`.
+2. **Backend geography:** `Countries`, `StatesProvinces`, `Counties` entities (FIPS-keyed, no geometry column); seeder reads embedded us-atlas counties GeoJSON for `Counties` + `States` rows. Boundary files served as static assets from `wwwroot/geo/`.
 3. **Frontend — generic tree editor (`TaxonomyAdmin`)** wired to Sports first.
 4. **Frontend — `TimeRangeContext` + slider primitive** with a baked-in `IDatasetTimeProfile` for Teams (year-level).
 5. **Frontend — Grid viewer** (lowest risk, fastest payoff, validates the filter + time-window contract).
@@ -670,8 +683,8 @@ All collection endpoints accept `from` / `to` query params honoring the active t
 
 ### 12.9 Open Questions / Deferred
 
-- **Vector tiles?** If raster OSM tiles feel limiting, evaluate MapLibre GL + a vector tile provider. Not blocking Phase 2.
-- **Spatial queries on the server.** We're storing `geography` columns now but not using them in Phase 2. First real use case (e.g. "all venues within 100mi of a point") will validate the choice.
+- **Vector tile basemap.** The current style ships no basemap. If/when context (roads, hillshade, labels) becomes useful, add a `raster` or `vector` source to `mapStyle.ts` pointing at a tile provider; the boundary layers stack cleanly on top.
+- **Spatial queries on the server.** We no longer store `geography` columns. The first real use case (e.g. "all venues within 100mi of a point") will revisit the decision — likely by reintroducing a single `geography` column on `Venues` rather than reviving the country/state/county geometry pipeline.
 - **Real-time data.** Sports schedules and live scores are out of scope for Phase 2; the architecture supports them (TeamSeasons → Games → LiveEvents) but we build that when there's a concrete need.
 - **Non-US geography.** Schema supports it; we defer the data + UX work until a non-US dataset arrives.
 

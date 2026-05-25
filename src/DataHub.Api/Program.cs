@@ -46,14 +46,6 @@ builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
 
 builder.Services.AddDataHubInfrastructure(builder.Configuration);
 
-// Default the geo-cache root to <contentRoot>/wwwroot/geo-cache so static files can serve it.
-// (GeoCacheWriter reads Geo:CacheRoot from configuration; we set it here if not already set.)
-if (string.IsNullOrWhiteSpace(builder.Configuration["Geo:CacheRoot"]))
-{
-    builder.Configuration["Geo:CacheRoot"] =
-        Path.Combine(builder.Environment.ContentRootPath, "wwwroot", "geo-cache");
-}
-
 // JWT auth
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt section is missing.");
@@ -128,21 +120,21 @@ else
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Serve cached GeoJSON files under /geo-cache/. These are written by GeoCacheWriter
-// on each geometry update. We allow .geojson via a custom content type provider.
+// Serve static geographic boundary files under /geo/* (countries, US states,
+// US counties). These are versioned, immutable assets; long-cache them and
+// register the geo+json content type for .geojson files.
 {
-    var geoCacheRoot = builder.Configuration["Geo:CacheRoot"]!;
-    Directory.CreateDirectory(geoCacheRoot);
+    var geoRoot = Path.Combine(builder.Environment.ContentRootPath, "wwwroot", "geo");
+    Directory.CreateDirectory(geoRoot);
     var contentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
     contentTypes.Mappings[".geojson"] = "application/geo+json";
     app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions
     {
-        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(geoCacheRoot),
-        RequestPath = "/geo-cache",
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(geoRoot),
+        RequestPath = "/geo",
         ContentTypeProvider = contentTypes,
         OnPrepareResponse = ctx =>
         {
-            // Cache is invalidated by callers via ?v={updatedAtTicks} query strings.
             ctx.Context.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
         }
     });

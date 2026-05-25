@@ -14,7 +14,6 @@ public class CountryConfiguration : IEntityTypeConfiguration<Country>
         b.Property(x => x.Iso2).IsRequired().HasMaxLength(2);
         b.Property(x => x.Iso3).HasMaxLength(3);
         b.Property(x => x.Name).IsRequired().HasMaxLength(200);
-        b.Property(x => x.Geometry).HasColumnType("geography");
 
         b.HasIndex(x => x.Iso2).IsUnique();
         b.HasIndex(x => x.Name);
@@ -36,7 +35,6 @@ public class StateConfiguration : IEntityTypeConfiguration<State>
         b.Property(x => x.Code).IsRequired().HasMaxLength(10);
         b.Property(x => x.Name).IsRequired().HasMaxLength(200);
         b.Property(x => x.Fips).HasMaxLength(10);
-        b.Property(x => x.Geometry).HasColumnType("geography");
 
         b.HasIndex(x => new { x.CountryId, x.Code }).IsUnique();
         b.HasIndex(x => x.Fips);
@@ -57,7 +55,6 @@ public class CountyConfiguration : IEntityTypeConfiguration<County>
 
         b.Property(x => x.Name).IsRequired().HasMaxLength(200);
         b.Property(x => x.Fips).HasMaxLength(10);
-        b.Property(x => x.Geometry).HasColumnType("geography");
 
         b.HasIndex(x => new { x.StateId, x.Name });
         b.HasIndex(x => x.Fips).IsUnique();

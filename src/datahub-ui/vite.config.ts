@@ -14,6 +14,14 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // Static geographic boundary files (countries / states / counties) live
+      // under the API project's wwwroot/geo/ and are served by ASP.NET Core
+      // static file middleware. Proxy them so /geo/* works the same in dev.
+      '/geo': {
+        target: process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:5275',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 })

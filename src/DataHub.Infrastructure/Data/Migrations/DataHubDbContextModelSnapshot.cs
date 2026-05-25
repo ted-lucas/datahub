@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using NetTopologySuite.Geometries;
 
 #nullable disable
 
@@ -146,9 +145,6 @@ namespace DataHub.Infrastructure.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
-                    b.Property<Geometry>("Geometry")
-                        .HasColumnType("geography");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
@@ -203,9 +199,6 @@ namespace DataHub.Infrastructure.Data.Migrations
                     b.Property<string>("Fips")
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
-
-                    b.Property<Geometry>("Geometry")
-                        .HasColumnType("geography");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
@@ -264,9 +257,6 @@ namespace DataHub.Infrastructure.Data.Migrations
                     b.Property<string>("Fips")
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
-
-                    b.Property<Geometry>("Geometry")
-                        .HasColumnType("geography");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");

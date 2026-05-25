@@ -2,6 +2,11 @@ using DataHub.Core.DTOs.Geo;
 
 namespace DataHub.Core.Interfaces;
 
+/// <summary>
+/// Read-mostly reference data for the map module. Boundaries (polygons) are
+/// served as static GeoJSON files under <c>/geo/*</c> and joined to these
+/// rows on the frontend by FIPS / ISO-2.
+/// </summary>
 public interface IGeoService
 {
     // Countries
@@ -11,42 +16,47 @@ public interface IGeoService
     Task<CountryDto> CreateCountryAsync(CreateCountryRequest req, CancellationToken ct = default);
     Task<CountryDto?> UpdateCountryAsync(Guid id, UpdateCountryRequest req, CancellationToken ct = default);
     Task<bool> DeactivateCountryAsync(Guid id, CancellationToken ct = default);
-    Task<bool> SetCountryGeometryAsync(Guid id, string geoJson, CancellationToken ct = default);
 
     // States
     Task<IReadOnlyList<StateDto>> ListStatesAsync(Guid countryId, bool includeInactive = false, CancellationToken ct = default);
+    Task<IReadOnlyList<StateDto>> ListStatesByCountryIso2Async(string iso2, bool includeInactive = false, CancellationToken ct = default);
     Task<StateDto?> GetStateAsync(Guid id, CancellationToken ct = default);
     Task<StateDto> CreateStateAsync(Guid countryId, CreateStateRequest req, CancellationToken ct = default);
     Task<StateDto?> UpdateStateAsync(Guid id, UpdateStateRequest req, CancellationToken ct = default);
     Task<bool> DeactivateStateAsync(Guid id, CancellationToken ct = default);
-    Task<bool> SetStateGeometryAsync(Guid id, string geoJson, CancellationToken ct = default);
 
     // Counties
     Task<IReadOnlyList<CountyDto>> ListCountiesAsync(Guid stateId, bool includeInactive = false, CancellationToken ct = default);
+    Task<IReadOnlyList<CountyDto>> ListCountiesByStateFipsAsync(string stateFips, bool includeInactive = false, CancellationToken ct = default);
     Task<CountyDto?> GetCountyAsync(Guid id, CancellationToken ct = default);
     Task<CountyDto> CreateCountyAsync(Guid stateId, CreateCountyRequest req, CancellationToken ct = default);
     Task<CountyDto?> UpdateCountyAsync(Guid id, UpdateCountyRequest req, CancellationToken ct = default);
     Task<bool> DeactivateCountyAsync(Guid id, CancellationToken ct = default);
-    Task<bool> SetCountyGeometryAsync(Guid id, string geoJson, CancellationToken ct = default);
+
+    // Metrics — choropleth data source. One row per region keyed by FIPS/ISO.
+    //
+    // `kind` selects what's being counted:
+    //   - Regions: row counts of geographic children (states-per-country, counties-per-state).
+    //              The original placeholder; useful even with no domain data loaded.
+    //   - Teams:   Sports.Team rows joined by `Team.Country` (ISO-2/USA) and `Team.State` (postal -> FIPS).
+    //   - Venues:  Sports.Venue rows joined the same way.
+    //
+    // Teams/Venues are currently state-grained only — neither entity stores a county
+    // assignment. Calling them at County level falls back to Regions to keep the
+    // map painted instead of returning an empty FeatureCollection.
+    Task<IReadOnlyList<GeoMetricDto>> GetMetricsAsync(GeoMetricsLevel level, string? parentFips, GeoMetricKind kind = GeoMetricKind.Regions, CancellationToken ct = default);
 }
 
-/// <summary>
-/// Writes per-entity GeoJSON cache files plus rolled-up bundle files
-/// under <c>wwwroot/geo-cache/</c>. Frontend reads these via the static
-/// file middleware instead of pulling geometry through the API.
-/// </summary>
-public interface IGeoCacheWriter
+public enum GeoMetricsLevel
 {
-    /// <summary>Root cache directory, e.g. <c>{contentRoot}/wwwroot/geo-cache</c>.</summary>
-    string CacheRoot { get; }
+    Country,
+    State,
+    County,
+}
 
-    Task WriteCountryAsync(Guid id, string geoJson, CancellationToken ct = default);
-    Task WriteStateAsync(Guid id, string geoJson, CancellationToken ct = default);
-    Task WriteCountyAsync(Guid id, string geoJson, CancellationToken ct = default);
-
-    /// <summary>Rewrites <c>states/bundle-{countryId}.geojson</c> from all active states of that country.</summary>
-    Task RebuildStatesBundleAsync(Guid countryId, IEnumerable<(Guid Id, string Code, string Name, string FeatureGeoJson)> features, CancellationToken ct = default);
-
-    /// <summary>Rewrites <c>counties/bundle-{stateId}.geojson</c> from all active counties of that state.</summary>
-    Task RebuildCountiesBundleAsync(Guid stateId, IEnumerable<(Guid Id, string Name, string? Fips, string FeatureGeoJson)> features, CancellationToken ct = default);
+public enum GeoMetricKind
+{
+    Regions,
+    Teams,
+    Venues,
 }

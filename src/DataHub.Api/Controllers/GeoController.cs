@@ -50,11 +50,6 @@ public class GeoCountriesController : ControllerBase
     public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
         => await _geo.DeactivateCountryAsync(id, ct) ? NoContent() : NotFound();
 
-    [HttpPut("{id:guid}/geometry")]
-    [Authorize(Policy = Permissions.GeoManage)]
-    public async Task<IActionResult> SetGeometry(Guid id, [FromBody] SetGeometryRequest req, CancellationToken ct)
-        => await _geo.SetCountryGeometryAsync(id, req.GeoJson, ct) ? NoContent() : NotFound();
-
     [HttpGet("{countryId:guid}/states")]
     [Authorize(Policy = Permissions.GeoRead)]
     public async Task<ActionResult<IReadOnlyList<StateDto>>> ListStates(Guid countryId, [FromQuery] bool includeInactive = false, CancellationToken ct = default)
@@ -80,6 +75,12 @@ public class GeoStatesController : ControllerBase
     private readonly IGeoService _geo;
     public GeoStatesController(IGeoService geo) { _geo = geo; }
 
+    /// <summary>List states for a country, addressed by ISO-2 (e.g. <c>?country=US</c>).</summary>
+    [HttpGet]
+    [Authorize(Policy = Permissions.GeoRead)]
+    public async Task<ActionResult<IReadOnlyList<StateDto>>> List([FromQuery] string country, [FromQuery] bool includeInactive = false, CancellationToken ct = default)
+        => Ok(await _geo.ListStatesByCountryIso2Async(country, includeInactive, ct));
+
     [HttpGet("{id:guid}")]
     [Authorize(Policy = Permissions.GeoRead)]
     public async Task<ActionResult<StateDto>> Get(Guid id, CancellationToken ct)
@@ -94,11 +95,6 @@ public class GeoStatesController : ControllerBase
     [Authorize(Policy = Permissions.GeoManage)]
     public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
         => await _geo.DeactivateStateAsync(id, ct) ? NoContent() : NotFound();
-
-    [HttpPut("{id:guid}/geometry")]
-    [Authorize(Policy = Permissions.GeoManage)]
-    public async Task<IActionResult> SetGeometry(Guid id, [FromBody] SetGeometryRequest req, CancellationToken ct)
-        => await _geo.SetStateGeometryAsync(id, req.GeoJson, ct) ? NoContent() : NotFound();
 
     [HttpGet("{stateId:guid}/counties")]
     [Authorize(Policy = Permissions.GeoRead)]
@@ -125,6 +121,12 @@ public class GeoCountiesController : ControllerBase
     private readonly IGeoService _geo;
     public GeoCountiesController(IGeoService geo) { _geo = geo; }
 
+    /// <summary>List counties for a state, addressed by state FIPS (e.g. <c>?state=06</c>).</summary>
+    [HttpGet]
+    [Authorize(Policy = Permissions.GeoRead)]
+    public async Task<ActionResult<IReadOnlyList<CountyDto>>> List([FromQuery] string state, [FromQuery] bool includeInactive = false, CancellationToken ct = default)
+        => Ok(await _geo.ListCountiesByStateFipsAsync(state, includeInactive, ct));
+
     [HttpGet("{id:guid}")]
     [Authorize(Policy = Permissions.GeoRead)]
     public async Task<ActionResult<CountyDto>> Get(Guid id, CancellationToken ct)
@@ -139,9 +141,31 @@ public class GeoCountiesController : ControllerBase
     [Authorize(Policy = Permissions.GeoManage)]
     public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
         => await _geo.DeactivateCountyAsync(id, ct) ? NoContent() : NotFound();
+}
 
-    [HttpPut("{id:guid}/geometry")]
-    [Authorize(Policy = Permissions.GeoManage)]
-    public async Task<IActionResult> SetGeometry(Guid id, [FromBody] SetGeometryRequest req, CancellationToken ct)
-        => await _geo.SetCountyGeometryAsync(id, req.GeoJson, ct) ? NoContent() : NotFound();
+// ============================================================================
+// Metrics — choropleth payload for the map. Keyed by FIPS (or ISO-2 for country).
+// ============================================================================
+[ApiController]
+[Authorize]
+[Route("api/geo/metrics")]
+public class GeoMetricsController : ControllerBase
+{
+    private readonly IGeoService _geo;
+    public GeoMetricsController(IGeoService geo) { _geo = geo; }
+
+    /// <summary>
+    /// <c>GET /api/geo/metrics?level=state&amp;parent=US&amp;metric=teams</c> -> one row per region.
+    /// <para><c>level</c>: country | state | county.</para>
+    /// <para><c>parent</c>: optional ISO-2 (for state queries) or state FIPS (for county queries).</para>
+    /// <para><c>metric</c>: regions (default, child counts) | teams | venues. See <see cref="GeoMetricKind"/>.</para>
+    /// </summary>
+    [HttpGet]
+    [Authorize(Policy = Permissions.GeoRead)]
+    public async Task<ActionResult<IReadOnlyList<GeoMetricDto>>> Get(
+        [FromQuery] GeoMetricsLevel level = GeoMetricsLevel.State,
+        [FromQuery] string? parent = null,
+        [FromQuery] GeoMetricKind metric = GeoMetricKind.Regions,
+        CancellationToken ct = default)
+        => Ok(await _geo.GetMetricsAsync(level, parent, metric, ct));
 }

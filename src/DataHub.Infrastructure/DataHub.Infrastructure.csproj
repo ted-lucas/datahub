@@ -17,8 +17,14 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
+    <!--
+      NetTopologySuite is no longer used at runtime (geo geometry is served as static
+      GeoJSON files rather than stored in SQL Server `geography` columns). The package
+      stays referenced solely so the historical AddGeoModule migration + its Designer
+      snapshot, which reference NTS's Geometry type, continue to compile. Subsequent
+      migrations / runtime code must not introduce new NTS usage.
+    -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer.NetTopologySuite" Version="10.0.8" />
-    <PackageReference Include="NetTopologySuite.IO.GeoJSON" Version="4.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.8" />

@@ -166,6 +166,10 @@ Content-Type: application/json
 
 ### ---------------------------------------------------------------------------
 ### Geo: Countries
+###
+### Boundary geometry is no longer stored in the database. The map UI loads
+### static GeoJSON / TopoJSON from /geo/* (served from wwwroot/geo/) and joins
+### them to the metrics feed below by FIPS / ISO codes.
 ### ---------------------------------------------------------------------------
 
 ### List countries
@@ -206,15 +210,6 @@ Content-Type: application/json
   "name": "United States of America"
 }
 
-### Set country geometry (GeoJSON Polygon or MultiPolygon, WGS84 lon/lat)
-PUT {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}/geometry
-Authorization: Bearer {{token}}
-Content-Type: application/json
-
-{
-  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-125,24],[-66,24],[-66,49],[-125,49],[-125,24]]]}"
-}
-
 ### Soft-delete country
 DELETE {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}
 Authorization: Bearer {{token}}
@@ -223,12 +218,15 @@ Authorization: Bearer {{token}}
 ### Geo: States
 ### ---------------------------------------------------------------------------
 
-### List states for USA
+### List states for a country (path form, by country id)
 GET {{DataHub.Api_HostAddress}}/api/geo/countries/{{countryId}}/states
 Authorization: Bearer {{token}}
 
-### Get state by id
-# Replace with a real GUID from the list above
+### List states for a country (query form, by ISO-2 — used by the map UI)
+GET {{DataHub.Api_HostAddress}}/api/geo/states?country=US
+Authorization: Bearer {{token}}
+
+### Get state by id (replace {stateId} with a real GUID)
 GET {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}
 Authorization: Bearer {{token}}
 
@@ -254,15 +252,6 @@ Content-Type: application/json
   "fips": "06"
 }
 
-### Set state geometry
-PUT {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}/geometry
-Authorization: Bearer {{token}}
-Content-Type: application/json
-
-{
-  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-124,32],[-114,32],[-114,42],[-124,42],[-124,32]]]}"
-}
-
 ### Soft-delete state
 DELETE {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}
 Authorization: Bearer {{token}}
@@ -271,8 +260,12 @@ Authorization: Bearer {{token}}
 ### Geo: Counties
 ### ---------------------------------------------------------------------------
 
-### List counties for a state
+### List counties for a state (path form, by state id)
 GET {{DataHub.Api_HostAddress}}/api/geo/states/{stateId}/counties
+Authorization: Bearer {{token}}
+
+### List counties for a state (query form, by state FIPS — used by the map UI)
+GET {{DataHub.Api_HostAddress}}/api/geo/counties?state=06
 Authorization: Bearer {{token}}
 
 ### Get county by id
@@ -299,36 +292,64 @@ Content-Type: application/json
   "fips": "06999"
 }
 
-### Set county geometry
-PUT {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}/geometry
-Authorization: Bearer {{token}}
-Content-Type: application/json
-
-{
-  "geoJson": "{\"type\":\"Polygon\",\"coordinates\":[[[-122.5,37.7],[-122.3,37.7],[-122.3,37.9],[-122.5,37.9],[-122.5,37.7]]]}"
-}
-
 ### Soft-delete county
 DELETE {{DataHub.Api_HostAddress}}/api/geo/counties/{countyId}
 Authorization: Bearer {{token}}
 
 ### ---------------------------------------------------------------------------
-### Geo: Cache files (served as static GeoJSON, no auth)
-### Layout:
-###   /geo-cache/countries/{id}.geojson           single country feature
-###   /geo-cache/states/{id}.geojson              single state feature
-###   /geo-cache/counties/{id}.geojson            single county feature
-###   /geo-cache/states/bundle-{countryId}.geojson    FeatureCollection of states
-###   /geo-cache/counties/bundle-{stateId}.geojson    FeatureCollection of counties
+### Geo: Metrics (choropleth feed for the map UI)
+###
+### Returns one row per region at the requested level:
+###   { fips, name, count }
+###
+### Query params:
+###   level   country | state | county   (required-ish; defaults to state)
+###   parent  optional scope. ISO-2 for state queries (e.g. US),
+###           state FIPS for county queries (e.g. 06).
+###   metric  regions | teams | venues   (default: regions)
+###             regions = counts of geographic children (states-per-country, etc.)
+###             teams   = Sports.Team rows joined by Team.State postal -> FIPS
+###             venues  = Sports.Venue rows joined the same way
+###           Teams/Venues degrade to `regions` at county level (those entities
+###           don't store a county assignment yet).
 ### ---------------------------------------------------------------------------
 
-### Fetch the USA -> states bundle
-GET {{DataHub.Api_HostAddress}}/geo-cache/states/bundle-{{countryId}}.geojson
+### Country-level region counts (default metric)
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=country
+Authorization: Bearer {{token}}
 
-### Fetch a state -> counties bundle
-GET {{DataHub.Api_HostAddress}}/geo-cache/counties/bundle-{stateId}.geojson
+### State-level region counts (US)
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=state&parent=US
+Authorization: Bearer {{token}}
 
-### Fetch a single state feature
-GET {{DataHub.Api_HostAddress}}/geo-cache/states/{stateId}.geojson
+### County-level region counts (California)
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=county&parent=06
+Authorization: Bearer {{token}}
+
+### Teams per country
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=country&metric=teams
+Authorization: Bearer {{token}}
+
+### Teams per US state
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=state&parent=US&metric=teams
+Authorization: Bearer {{token}}
+
+### Venues per US state
+GET {{DataHub.Api_HostAddress}}/api/geo/metrics?level=state&parent=US&metric=venues
+Authorization: Bearer {{token}}
+
+### ---------------------------------------------------------------------------
+### Geo: Static boundary files (no auth, long-cache)
+### Served by ASP.NET Core static file middleware from wwwroot/geo/.
+### ---------------------------------------------------------------------------
+
+### Countries (TopoJSON, world-atlas)
+GET {{DataHub.Api_HostAddress}}/geo/countries-110m.topo.json
+
+### US states (TopoJSON, us-atlas)
+GET {{DataHub.Api_HostAddress}}/geo/us-states-10m.topo.json
+
+### US counties (TopoJSON, us-atlas)
+GET {{DataHub.Api_HostAddress}}/geo/us-counties-10m.topo.json
 
 ###

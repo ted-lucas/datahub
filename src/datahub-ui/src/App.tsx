@@ -8,6 +8,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import DataSources from './pages/DataSources'
 import DataEntries from './pages/DataEntries'
+import MapPage from './pages/MapPage'
 import Users from './pages/admin/Users'
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
                       <Route path="/" element={<Dashboard />} />
                       <Route path="/data-sources" element={<DataSources />} />
                       <Route path="/data-entries" element={<DataEntries />} />
+                      <Route path="/map" element={<MapPage />} />
                       <Route path="/admin/users" element={<Users />} />
                     </Routes>
                   </Layout>

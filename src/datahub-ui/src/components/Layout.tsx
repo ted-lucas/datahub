@@ -18,6 +18,7 @@ import {
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import StorageIcon from '@mui/icons-material/Storage'
 import TableChartIcon from '@mui/icons-material/TableChart'
+import MapIcon from '@mui/icons-material/Map'
 import PeopleIcon from '@mui/icons-material/People'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
@@ -29,6 +30,7 @@ const navItems = [
   { label: 'Dashboard', to: '/', icon: <DashboardIcon /> },
   { label: 'Data Sources', to: '/data-sources', icon: <StorageIcon /> },
   { label: 'Data Entries', to: '/data-entries', icon: <TableChartIcon /> },
+  { label: 'Map', to: '/map', icon: <MapIcon />, perm: 'geo:read' },
   { label: 'Users', to: '/admin/users', icon: <PeopleIcon />, perm: 'users:read' },
 ]
 
