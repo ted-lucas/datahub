@@ -384,6 +384,10 @@ Open http://localhost:5173 and log in with the seeded admin.
   MapLibre gives us data-driven styling (`interpolate` expressions on a `metric` feature property), zoom-driven layer LOD (per-layer `minzoom`/`maxzoom`), and feature-state hover without a re-render — all things we were going to fight Leaflet for once the choropleth grew beyond trivial. We deliberately ship *no* external basemap (no Mapbox / MapTiler / OSM tile server, no API keys, no rate limits): the style is just a flat background plus three boundary layers, which is exactly what a choropleth-first product needs. A real raster basemap can be dropped in later by adding one `raster` source to `mapStyle.ts`.
 - **2026-05-24 — `/api/geo/metrics` is the single choropleth feed; what's counted is selected by a `metric` query param (`regions` | `teams` | `venues`), not by separate endpoints.**
   Keeps the frontend join logic identical across metrics — fetch a flat `[{ fips, name, count }]`, merge by `joinKey`, let MapLibre's data-driven `fill-color` repaint. The state-level join for Teams/Venues relies on the seeded `UsStates.FipsByPostal` reverse lookup (postal "MO" → FIPS "29"), so we promoted that table from `internal` to `public`. Country-level joins for Teams/Venues normalize ISO-3 ("USA") → ISO-2 ("US") via the Countries table so the choropleth doesn't double-count countries that show up in two encodings. Teams and Venues currently have no county column; calling them at county level transparently falls back to the `regions` placeholder rather than returning an empty FeatureCollection. New metrics (e.g. `events`, `players`) add a single switch arm — boundaries, controller, and frontend picker need zero changes.
+- **2026-05-24 — Generic `TaxonomyAdmin` component instead of one-off hierarchy editors per domain.**
+  A `TaxonomySchema` descriptor (in `features/taxonomy/types.ts`) parameterizes a single Tree + Detail-form pair over any strictly hierarchical editable dataset. Sports is the first consumer; Geography will reuse the exact same component once its admin slice lands. Two shape-realities forced the descriptor to be richer than the obvious "level → child level" mapping: (a) a level can declare **multiple child groupings** (League has both Conferences and Teams (unassigned), each loading via its own filter), and (b) a level can declare itself as a child (Conference's children include Conferences). Pushing both into the descriptor — rather than special-casing them in the renderer — is what keeps the component reusable.
+- **2026-05-25 — Antimeridian-splitting added to country boundary loading (`features/map/useGeoData.ts`).**
+  world-atlas `countries-110m.topo.json` encodes Fiji, Russia, and Antarctica with rings whose decoded longitudes span ~360° (they include vertices on both sides of the ±180° seam). MapLibre's earcut triangulator sees a single ring 360° wide and produces nonsense triangles spanning the entire canvas — visible as long horizontal/diagonal bands across the world map. The fix is a small inline splitter (`splitRingAtAntimeridian`) that runs after `topojson.feature()`: for true antimeridian crossers (Fiji, Russia) it unwraps the ring into a continuous longitude run and Sutherland–Hodgman-clips it into east/west halves at lon=180; for polar rings (Antarctica), where there's no actual crossing and the 360° "edge" is the closure running along the antimeridian, it routes the closure through the south/north pole instead — geographically zero-length, Cartesian-wise a clean trapezoidal flap. No dependency added (turf/d3-geo would have worked but this is ~70 lines and the world-atlas surface area is fixed).
 
 ---
 
@@ -592,12 +596,17 @@ A first-class, app-wide UI primitive:
 
 Decision §9 (2026-05-22): we offer **two complementary surfaces** that hit the same API and respect the same permissions.
 
-#### 12.5.1 Generic Tree Editor — `/admin/taxonomy/sports`
+#### 12.5.1 Generic Tree Editor — `/admin/taxonomy/sports` ✅ implemented 2026-05-24
 
-- **Left pane:** lazy-loaded tree of the full hierarchy (Sport → Level → League → … → Team).
-- **Right pane:** form for the selected node, with **+ Add child** action contextual to the selected level.
-- Permission-gated: `sports:read` to view, `sports:manage` to mutate.
-- The component is **generic over the taxonomy** — driven by a per-domain schema descriptor (level names, allowed children, form fields). Reused later by `/admin/taxonomy/geography`.
+- **Left pane (`features/taxonomy/TaxonomyTree.tsx`):** lazy-loaded tree. Each node renders its children grouped into named sub-folders (one per `ChildGrouping` declared by the level descriptor); each grouping loads on first expand and caches its result. The chevron toggles the node; clicking the row selects it.
+- **Right pane (`TaxonomyAdmin.tsx`):** schema-driven form (`TaxonomyForm.tsx`) for the selected node, with Save / Delete actions. A modal `New <Singular>` dialog reuses the same form for creation.
+- Permission-gated: `sports:read` to view, `sports:manage` for the mutate buttons (Add / Save / Delete are disabled but the tree remains browsable).
+- **Generic over the taxonomy.** A `TaxonomySchema` (`features/taxonomy/types.ts`) is a `Record<levelId, LevelDescriptor>` where each level declares `singular`/`plural`, a `fields[]` form descriptor, an ordered list of `ChildGrouping`s, and async `create`/`update`/`remove` callbacks. The same component will host Geography (`Country → State → County`) by supplying a second schema.
+- Two real-world wrinkles are first-class in the model rather than special-cased in the renderer:
+  - **Multiple child groupings under one level.** A League's children are *Conferences* and *Teams (unassigned)*. Each grouping is its own folder with its own loader filter (`!t.conferenceId` for unassigned teams).
+  - **Self-recursive levels.** Conference declares two child groupings — *Sub-conferences* (recursive) and *Teams*. Both reach for the League ancestor via a small `ancestorOfLevel(node, 'league')` walk so they can call `/api/leagues/{leagueId}/{conferences|teams}` and filter by `parentConferenceId` / `conferenceId`.
+- Venues are **not** in the Sports tree (they're flat, referenced by `Team.VenueId`); they'll get a dedicated admin page in step 8.
+- Soft-delete is exposed as an `Active` checkbox on every level's form; the tree always lists with `includeInactive=true`.
 
 #### 12.5.2 Dedicated per-level pages
 
@@ -671,7 +680,7 @@ All collection endpoints accept `from` / `to` query params honoring the active t
 
 1. **Backend taxonomy:** `Sports`, `SportLevels`, `Leagues`, `Conferences`, `Teams`, `Venues` entities + EF configurations + migration + CRUD endpoints + new permissions in seeder.
 2. **Backend geography:** `Countries`, `StatesProvinces`, `Counties` entities (FIPS-keyed, no geometry column); seeder reads embedded us-atlas counties GeoJSON for `Counties` + `States` rows. Boundary files served as static assets from `wwwroot/geo/`.
-3. **Frontend — generic tree editor (`TaxonomyAdmin`)** wired to Sports first.
+3. **Frontend — generic tree editor (`TaxonomyAdmin`)** wired to Sports first. ✅ done 2026-05-24
 4. **Frontend — `TimeRangeContext` + slider primitive** with a baked-in `IDatasetTimeProfile` for Teams (year-level).
 5. **Frontend — Grid viewer** (lowest risk, fastest payoff, validates the filter + time-window contract).
 6. **Frontend — Map viewer** at Country scope, then State, then County (drill-down).

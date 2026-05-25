@@ -10,6 +10,7 @@ import DataSources from './pages/DataSources'
 import DataEntries from './pages/DataEntries'
 import MapPage from './pages/MapPage'
 import Users from './pages/admin/Users'
+import SportsTaxonomy from './pages/admin/SportsTaxonomy'
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
                       <Route path="/data-entries" element={<DataEntries />} />
                       <Route path="/map" element={<MapPage />} />
                       <Route path="/admin/users" element={<Users />} />
+                      <Route path="/admin/taxonomy/sports" element={<SportsTaxonomy />} />
                     </Routes>
                   </Layout>
                 </ProtectedRoute>

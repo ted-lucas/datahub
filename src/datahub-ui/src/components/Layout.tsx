@@ -20,6 +20,7 @@ import StorageIcon from '@mui/icons-material/Storage'
 import TableChartIcon from '@mui/icons-material/TableChart'
 import MapIcon from '@mui/icons-material/Map'
 import PeopleIcon from '@mui/icons-material/People'
+import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
@@ -31,6 +32,7 @@ const navItems = [
   { label: 'Data Sources', to: '/data-sources', icon: <StorageIcon /> },
   { label: 'Data Entries', to: '/data-entries', icon: <TableChartIcon /> },
   { label: 'Map', to: '/map', icon: <MapIcon />, perm: 'geo:read' },
+  { label: 'Sports', to: '/admin/taxonomy/sports', icon: <SportsBaseballIcon />, perm: 'sports:read' },
   { label: 'Users', to: '/admin/users', icon: <PeopleIcon />, perm: 'users:read' },
 ]
 
