@@ -415,6 +415,44 @@ Open http://localhost:5173 and log in with the seeded admin.
 
 ---
 
+## 10.1 Pickup Notes (next session)
+
+In-flight work on the **MLB Grid viewer** slice (§12.8 step 5, first instance). All code edits are on disk; build/install steps may be incomplete.
+
+**Files changed this session (not yet committed):**
+- `src/DataHub.Core/Entities/Sports/Team.cs` — added nullable `ClosedYear`.
+- `src/DataHub.Core/DTOs/SportsDtos.cs` — `ClosedYear` on `TeamDto` / `CreateTeamRequest` / `UpdateTeamRequest`.
+- `src/DataHub.Core/Interfaces/ISportsService.cs` — `GetTeamsAsync` gained optional `activeFromYear` / `activeToYear`.
+- `src/DataHub.Infrastructure/Services/SportsService.cs` — implements active-during-window filter + maps `ClosedYear` on create/update.
+- `src/DataHub.Api/Controllers/SportsController.cs` — `TeamsController.Query` accepts `from`/`to`/`g`, converts epoch-ms → year. `LeaguesController.GetTeams` call site uses `ct: ct` named arg (positional caller broke when params were inserted before `ct`).
+- `src/datahub-ui/package.json` — added `@mui/x-data-grid ^8.0.0` + `overrides` block forcing `@mui/material` and `@mui/system` to `^9.0.1` inside x-data-grid's subtree (peer range stops at v7).
+- `src/datahub-ui/src/api/endpoints.ts` — `ClosedYear` field on `TeamDto`; new `TeamsTimeWindow` type; new `sportsApi.queryTeams({ leagueId?, state?, includeInactive?, time? })`.
+- `src/datahub-ui/src/pages/sports/MlbTeams.tsx` (NEW) — DataGrid page. Resolves Baseball → Professional → MLB at mount, then queries `/api/teams` with active-during-window. Registers `sports.teams.mlb` time profile.
+- `src/datahub-ui/src/App.tsx` — `/sports/mlb` route.
+- `src/datahub-ui/src/components/Layout.tsx` — converted nav `Sports` from a flat link into a collapsible group ("MLB Teams", "Taxonomy"); default open.
+
+**To finish this slice (run in order):**
+1. `cd src/datahub-ui` then `Remove-Item -Recurse -Force node_modules, package-lock.json` then `npm install`. May surface another MUI peer-dep (e.g. `@mui/utils`); add to the `overrides` block in the same `{"@mui/material": "^9.0.1", "@mui/system": "^9.0.1", ...}` shape.
+2. `npm run build` — sanity check the DataGrid wiring compiles against TS.
+3. `dotnet build` — should be green now (the `ct: ct` fix is in).
+4. `dotnet ef migrations add AddTeamClosedYear --project src/DataHub.Infrastructure --startup-project src/DataHub.Api`
+5. `dotnet ef database update --project src/DataHub.Infrastructure --startup-project src/DataHub.Api`
+6. Smoke-test `/sports/mlb`: 30 teams visible, time slider live-filters by `FoundedYear`, sortable columns, division/league derived correctly.
+
+**Known risks / things to verify after install:**
+- `GridColDef.valueFormatter` signature in MlbTeams.tsx uses the **v8 form** `(value) => ...`. If npm pulls v7 (overrides somehow fail), the `Closed` cell will render `[object Object]` — switch to `({ value }) => ...`.
+- The override approach may need expansion (one more peer is plausible). Don't add a project-wide `.npmrc legacy-peer-deps=true` unless the override path proves untenable — see Decision Log 2026-05-25.
+- 5 uncommitted modified migration files were already on disk before this session. Inspect `git status` before staging.
+
+**Next slice candidates (pick one to start next session):**
+- **Map markers for MLB teams** (other half of "both, grid first"): static 30-city `{ city, state → [lon, lat] }` lookup in `features/map/`, new `MlbTeamMarkersLayer` as a `react-map-gl` `<Source type="geojson"/>` + circle layer, metric-picker entry "MLB Teams". Honors the same time window. ~150 LOC, no backend work.
+- **Backend `from`/`to` honoring on `/api/geo/metrics`** so the choropleth actually moves with the slider. Mirror the year-conversion done in `TeamsController.Query`. Carried from §10.1 step-4 deferral.
+- **Generalize `/sports/mlb` → `/sports/leagues/:slug`.** Only worth doing once a second league exists; right now it's premature.
+- **Dashboard viewer** (§12.8 step 7).
+- **Bundle size:** code-split `/map` and `/sports/mlb` with `React.lazy` — both pages pull heavy deps (maplibre-gl, x-data-grid).
+
+---
+
 ## 11. Quick Reference
 
 ### Run locally
