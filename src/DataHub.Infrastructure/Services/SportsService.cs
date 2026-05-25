@@ -289,12 +289,19 @@ public class SportsService : ISportsService
 
     // ---------------- Teams ----------------
 
-    public async Task<IEnumerable<TeamDto>> GetTeamsAsync(Guid? leagueId, string? state, bool includeInactive, CancellationToken ct = default)
+    public async Task<IEnumerable<TeamDto>> GetTeamsAsync(Guid? leagueId, string? state, bool includeInactive, int? activeFromYear = null, int? activeToYear = null, CancellationToken ct = default)
     {
         var q = _db.Teams.AsNoTracking().AsQueryable();
         if (leagueId.HasValue) q = q.Where(t => t.LeagueId == leagueId.Value);
         if (!string.IsNullOrWhiteSpace(state)) q = q.Where(t => t.State == state);
         if (!includeInactive) q = q.Where(t => t.IsActive);
+        // Active-during-window per §12.1.3:
+        //   FoundedYear ≤ windowEnd ∧ (ClosedYear is null ∨ ClosedYear ≥ windowStart)
+        // Rows with no FoundedYear are conservatively included (we can't prove they were inactive).
+        if (activeToYear.HasValue)
+            q = q.Where(t => t.FoundedYear == null || t.FoundedYear <= activeToYear.Value);
+        if (activeFromYear.HasValue)
+            q = q.Where(t => t.ClosedYear == null || t.ClosedYear >= activeFromYear.Value);
         return await q.OrderBy(t => t.Name).Select(t => ToDtoExpr(t)).ToListAsync(ct);
     }
 
@@ -317,6 +324,7 @@ public class SportsService : ISportsService
             State = req.State,
             Country = req.Country,
             FoundedYear = req.FoundedYear,
+            ClosedYear = req.ClosedYear,
             PrimaryColor = req.PrimaryColor,
             SecondaryColor = req.SecondaryColor,
             LogoRef = req.LogoRef,
@@ -337,6 +345,7 @@ public class SportsService : ISportsService
         t.State = req.State;
         t.Country = req.Country;
         t.FoundedYear = req.FoundedYear;
+        t.ClosedYear = req.ClosedYear;
         t.PrimaryColor = req.PrimaryColor;
         t.SecondaryColor = req.SecondaryColor;
         t.LogoRef = req.LogoRef;
@@ -356,7 +365,7 @@ public class SportsService : ISportsService
 
     private static TeamDto ToDtoExpr(Team t) =>
         new(t.Id, t.LeagueId, t.ConferenceId, t.VenueId, t.Name, t.City, t.State, t.Country,
-            t.FoundedYear, t.PrimaryColor, t.SecondaryColor, t.LogoRef, t.IsActive);
+            t.FoundedYear, t.ClosedYear, t.PrimaryColor, t.SecondaryColor, t.LogoRef, t.IsActive);
 
     private static TeamDto ToDtoMaterialized(Team t) => ToDtoExpr(t);
 }

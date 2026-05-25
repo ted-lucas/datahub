@@ -145,6 +145,7 @@ public record TeamDto(
     string? State,
     string? Country,
     int? FoundedYear,
+    int? ClosedYear,
     string? PrimaryColor,
     string? SecondaryColor,
     string? LogoRef,
@@ -159,6 +160,7 @@ public record CreateTeamRequest(
     string? State,
     string? Country,
     int? FoundedYear,
+    int? ClosedYear,
     string? PrimaryColor,
     string? SecondaryColor,
     string? LogoRef
@@ -172,6 +174,7 @@ public record UpdateTeamRequest(
     string? State,
     string? Country,
     int? FoundedYear,
+    int? ClosedYear,
     string? PrimaryColor,
     string? SecondaryColor,
     string? LogoRef,

@@ -18,7 +18,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { buildStyle } from './mapStyle'
 import { LEVELS } from './layers'
 import { loadCountries, loadCounties, loadStates } from './useGeoData'
-import { fetchMetrics, mergeMetrics } from './useGeoMetrics'
+import { fetchMetrics, mergeMetrics, type MetricsTimeWindow } from './useGeoMetrics'
 import type { GeoFeatureCollection, GeoFeatureProperties, GeoLevel, GeoMetricKind } from './types'
 
 interface HoverState {
@@ -33,7 +33,12 @@ const METRIC_OPTIONS: Array<{ value: GeoMetricKind; label: string }> = [
   { value: 'venues', label: 'Venues' },
 ]
 
-export function MapView() {
+export interface MapViewProps {
+  /** Time window driven by the app-wide TimeBar. */
+  time?: MetricsTimeWindow
+}
+
+export function MapView({ time }: MapViewProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MlMap | null>(null)
   const hoveredRef = useRef<{ source: string; id: string | number } | null>(null)
@@ -123,7 +128,7 @@ export function MapView() {
         // We retry by re-running this effect once boundaries are in via the
         // styleReady flip, but on first paint they may genuinely not be ready.
         if (!fc) return
-        const rows = await fetchMetrics(level, stateParentByLevel[level], metric)
+        const rows = await fetchMetrics(level, stateParentByLevel[level], metric, time)
         if (cancelled) return
         const merged = mergeMetrics(fc, rows)
         const src = map.getSource(LEVELS[level].sourceId) as maplibregl.GeoJSONSource | undefined
@@ -138,8 +143,9 @@ export function MapView() {
     return () => {
       cancelled = true
     }
-    // `styleReady` so we re-run after boundaries first arrive.
-  }, [metric, styleReady, stateParentByLevel])
+    // `styleReady` so we re-run after boundaries first arrive. `time` so we
+    // re-fetch whenever the app-wide window changes.
+  }, [metric, styleReady, stateParentByLevel, time])
 
   // ── Hover + click interactions per level ───────────────────────────────
   useEffect(() => {
@@ -208,34 +214,16 @@ export function MapView() {
   }, [])
 
   return (
-    <Box sx={{ position: 'relative', width: '100%', height: 'calc(100vh - 112px)' }}>
+    <Box sx={{ position: 'relative', width: '100%', height: 'calc(100vh - 200px)' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Top-left: status chips */}
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{ position: 'absolute', top: 12, left: 12, pointerEvents: 'none' }}
-      >
-        <Chip
-          size="small"
-          color="primary"
-          label={`zoom ${zoom.toFixed(1)} · ${activeLevel(zoom)}`}
-        />
-        {hover && (
-          <Chip
-            size="small"
-            label={`${hover.name}${hover.metric != null ? ` · ${hover.metric}` : ''}`}
-          />
-        )}
-      </Stack>
-
-      {/* Bottom-left: metric picker */}
+      {/* Top-left: metric picker (moved here because the bottom edge is now
+          occupied by the app-wide TimeBar). */}
       <Paper
         elevation={3}
         sx={{
           position: 'absolute',
-          bottom: 24,
+          top: 12,
           left: 12,
           px: 1.5,
           py: 1,
@@ -262,6 +250,25 @@ export function MapView() {
           ))}
         </ToggleButtonGroup>
       </Paper>
+
+      {/* Top-left below picker: status chips */}
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{ position: 'absolute', top: 96, left: 12, pointerEvents: 'none' }}
+      >
+        <Chip
+          size="small"
+          color="primary"
+          label={`zoom ${zoom.toFixed(1)} · ${activeLevel(zoom)}`}
+        />
+        {hover && (
+          <Chip
+            size="small"
+            label={`${hover.name}${hover.metric != null ? ` · ${hover.metric}` : ''}`}
+          />
+        )}
+      </Stack>
     </Box>
   )
 }

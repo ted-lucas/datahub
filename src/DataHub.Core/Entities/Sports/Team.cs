@@ -17,6 +17,11 @@ public class Team : AuditableEntity
     public string? State { get; set; }
     public string? Country { get; set; }
     public int? FoundedYear { get; set; }
+    /// <summary>
+    /// Year the team ceased operations (relocated/dissolved). Null = still active.
+    /// Used by the time-window active-during filter per ARCHITECTURE §12.1.3.
+    /// </summary>
+    public int? ClosedYear { get; set; }
     public string? PrimaryColor { get; set; }
     public string? SecondaryColor { get; set; }
     public string? LogoRef { get; set; }

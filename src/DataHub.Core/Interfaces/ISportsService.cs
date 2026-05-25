@@ -39,8 +39,8 @@ public interface ISportsService
     Task<VenueDto?> UpdateVenueAsync(Guid id, UpdateVenueRequest req, CancellationToken ct = default);
     Task<bool> DeleteVenueAsync(Guid id, CancellationToken ct = default);
 
-    // Teams (scoped to a League)
-    Task<IEnumerable<TeamDto>> GetTeamsAsync(Guid? leagueId, string? state, bool includeInactive, CancellationToken ct = default);
+    // Teams (scoped to a League; optional active-during-window filter per §12.1.3)
+    Task<IEnumerable<TeamDto>> GetTeamsAsync(Guid? leagueId, string? state, bool includeInactive, int? activeFromYear = null, int? activeToYear = null, CancellationToken ct = default);
     Task<TeamDto?> GetTeamAsync(Guid id, CancellationToken ct = default);
     Task<TeamDto?> CreateTeamAsync(Guid leagueId, CreateTeamRequest req, CancellationToken ct = default);
     Task<TeamDto?> UpdateTeamAsync(Guid id, UpdateTeamRequest req, CancellationToken ct = default);

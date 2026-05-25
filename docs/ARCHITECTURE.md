@@ -388,6 +388,13 @@ Open http://localhost:5173 and log in with the seeded admin.
   A `TaxonomySchema` descriptor (in `features/taxonomy/types.ts`) parameterizes a single Tree + Detail-form pair over any strictly hierarchical editable dataset. Sports is the first consumer; Geography will reuse the exact same component once its admin slice lands. Two shape-realities forced the descriptor to be richer than the obvious "level → child level" mapping: (a) a level can declare **multiple child groupings** (League has both Conferences and Teams (unassigned), each loading via its own filter), and (b) a level can declare itself as a child (Conference's children include Conferences). Pushing both into the descriptor — rather than special-casing them in the renderer — is what keeps the component reusable.
 - **2026-05-25 — Antimeridian-splitting added to country boundary loading (`features/map/useGeoData.ts`).**
   world-atlas `countries-110m.topo.json` encodes Fiji, Russia, and Antarctica with rings whose decoded longitudes span ~360° (they include vertices on both sides of the ±180° seam). MapLibre's earcut triangulator sees a single ring 360° wide and produces nonsense triangles spanning the entire canvas — visible as long horizontal/diagonal bands across the world map. The fix is a small inline splitter (`splitRingAtAntimeridian`) that runs after `topojson.feature()`: for true antimeridian crossers (Fiji, Russia) it unwraps the ring into a continuous longitude run and Sutherland–Hodgman-clips it into east/west halves at lon=180; for polar rings (Antarctica), where there's no actual crossing and the 360° "edge" is the closure running along the antimeridian, it routes the closure through the south/north pole instead — geographically zero-length, Cartesian-wise a clean trapezoidal flap. No dependency added (turf/d3-geo would have worked but this is ~70 lines and the world-atlas surface area is fixed).
+- **2026-05-25 — Time is app-wide state, not per-page. `TimeRangeProvider` wraps the entire authenticated app; viewers register a `IDatasetTimeProfile` via `useRegisterTimeProfile()` on mount and read the window via `useTimeRange()`. The fixed-footer `TimeBar` is present on every page so time-awareness reads as a property of the *application*, not of individual viewers.**
+  Rationale: forcing every viewer to render its own slider would (a) duplicate UI, (b) make cross-viewer comparison ("same window, different visualization") impossible without manual sync, (c) leak the URL-sync logic into every page, and (d) make playback a per-page feature rather than the global animation it ought to be. The price is a tiny bit of indirection (viewers must remember to register a profile), but `useRegisterTimeProfile` makes that a one-liner.
+- **2026-05-25 — Frontend ships time-aware request shape now; backend filtering deferred until the Grid viewer needs it.**
+  The Map already passes `?from&to&g` on every `/api/geo/metrics` call, but the backend currently ignores them and returns all-time metrics. Doing it this way means (a) the slider's contract is real today (URL-sharable, playback-animatable, etc.), and (b) when backend filtering lands it's purely an additive backend change — no frontend refactor. The cost is a brief period where the slider looks like it should affect the Map but doesn't; acceptable because the visible affordances (granularity picker, playback, profile picker) all *do* work, and the actual metric values just don't change with the window yet.
+- **2026-05-25 — Granularity strategy pattern instead of `switch (granularity)` everywhere. Each `GranularityId` (`day`/`month`/`year`/`season`) has a `GranularityStrategy` object with `floor/ceil/step/count/format/tickStride`; the slider, context, and any future consumer call methods on the strategy, never branch on the id. Season is the US-sports `Sep–Aug` convention; reparameterizing for soccer / academic / fiscal years is a constant change.**
+- **2026-05-24 — First Grid viewer (`/sports/mlb`) is league-specific, not generic; `Team` gets a `ClosedYear` column to make active-during-window filtering correct.**
+  Two questions answered together. (a) **Scope:** a generic `/sports/leagues/:slug` page would be designing in the dark with exactly one league seeded — we'd guess at column sets, league-specific affordances (e.g. AL/NL → divisions), and detail panes for sports we don't have. The cheaper path is to ship a concrete MLB page, treat it as the reference impl, and factor out a generic viewer when the *second* league lands and the shared shape is observable rather than imagined. (b) **`Team.ClosedYear`:** the existing schema only had `FoundedYear`, which made the §12.1.3 active-during filter half-correct (`FoundedYear ≤ windowEnd` ✓, but no closed-side bound). Adding the nullable column is one migration and makes the filter symmetric — defunct teams (e.g. Montreal Expos) will fall out of windows after their close year, which is the user-facing point of having a time slider. The backend converts the slider's epoch-ms boundaries to calendar years before filtering (Team data is year-grained); the `g` query param is accepted and ignored so the slider URL contract still round-trips cleanly.
 
 ---
 
@@ -579,16 +586,24 @@ A breadcrumb (`USA › Missouri › St. Louis County`) is rendered alongside the
 
 ---
 
-### 12.4 Universal Time Slider
+### 12.4 Universal Time Slider ✅ implemented 2026-05-25 (frontend; backend filtering deferred)
 
-A first-class, app-wide UI primitive:
+A first-class, app-wide UI primitive living in `src/datahub-ui/src/features/time/`:
 
-- **Dual-handle range slider** with start and end dates.
-- **Per-dataset granularity** (decision §9, 2026-05-22): each dataset declares an `IDatasetTimeProfile { granularity: 'day' | 'month' | 'year' | 'season'; minDate; maxDate; defaultStep; snapPoints? }`. The slider adapts tick marks, snap behavior, and playback step to the active profile.
-- **Playback** mode animates the upper handle forward at a configurable step (e.g., 1 year/sec for season-level data, 1 day/sec for game-level data).
-- **Snap** to common boundaries (season start, calendar year, decade) when the profile defines `snapPoints`.
-- State lives in a React context (`TimeRangeContext`) so Map / Grid / Dashboard all react to the same window.
-- **URL-synced** (`?from=…&to=…&g=year`) so views are shareable/bookmarkable.
+- **Dual-handle range slider** with start and end dates (MUI `Slider` in range mode, operating in bucket-index space).
+- **Four granularities shipped:** `day`, `month`, `year`, `season`. Each is a `GranularityStrategy` (`granularity.ts`) implementing `floor / ceil / step / count / format / tickStride`. Season = US-sports year, Sep YYYY → Aug YYYY+1, formatted `YYYY-YY`. Picker in the footer switches between them; the slider re-buckets without losing the active window (just re-snaps it to the new granularity's boundaries).
+- **`IDatasetTimeProfile`** (`types.ts`): viewer pages declare `{ id, label, granularity, minDate, maxDate, defaultStep, snapPoints? }`. Pages register via `useRegisterTimeProfile(profile)`; the footer's profile picker only appears when >1 profile is registered. The TimeBar renders even when zero profiles are registered (a fallback "All time" profile keeps the bar visible, disabled, so layout is constant across pages).
+- **Playback** (`expand` | `slide` mode, 0.5–10× speed): `requestAnimationFrame` loop in the provider advances the upper handle by `defaultStep × speed` buckets per second, optionally dragging the lower handle in lockstep (`slide`). Auto-stops when the upper handle reaches the profile's `maxDate`.
+- **State lives in `TimeRangeContext`** (`TimeRangeContext.tsx`) wrapped around the entire authenticated app in `App.tsx`. Map / Grid / Dashboard all read from `useTimeRange()`.
+- **URL-synced** (`?from=…&to=…&g=…&profile=…`) via `history.replaceState` on every change; hydrated on mount. No history pollution, back/forward unaffected.
+- **Filter semantics: active-during-window (overlap).** Per §12.1.3 contract — a fact matches the window iff `[EffectiveFrom, EffectiveTo] ∩ [from, to] ≠ ∅`. This is the contract the backend will honor when filtering lands; the frontend already passes `from`/`to`/`g` on every metrics request.
+- **Footer placement:** `TimeBar` is a fixed-bottom `Paper` (z-index above the sidebar drawer). Layout adds bottom padding equal to the bar's height so content never hides behind it.
+- **Map wiring:** `MapPage` registers `sports.regions` (1850 → next-year, year granularity, step 1) and forwards the active window to `<MapView time={…}>`. `useGeoMetrics.fetchMetrics` includes `from`/`to`/`g` in the `/api/geo/metrics` query. The backend currently ignores those params — it'll start honoring them when the Grid viewer needs server-side filtering (deferred from this slice on purpose).
+
+Open follow-ups (tracked in §10):
+- Backend `from`/`to`/`g` honoring on `/api/geo/metrics` (and the Sports queries the Grid will use).
+- `snapPoints` on the slider (no consumer needs it yet — current snapping is granularity-aligned).
+- Per-bucket histogram overlay on the slider track (à la Kibana) once we have row counts to plot.
 
 ---
 
@@ -681,8 +696,8 @@ All collection endpoints accept `from` / `to` query params honoring the active t
 1. **Backend taxonomy:** `Sports`, `SportLevels`, `Leagues`, `Conferences`, `Teams`, `Venues` entities + EF configurations + migration + CRUD endpoints + new permissions in seeder.
 2. **Backend geography:** `Countries`, `StatesProvinces`, `Counties` entities (FIPS-keyed, no geometry column); seeder reads embedded us-atlas counties GeoJSON for `Counties` + `States` rows. Boundary files served as static assets from `wwwroot/geo/`.
 3. **Frontend — generic tree editor (`TaxonomyAdmin`)** wired to Sports first. ✅ done 2026-05-24
-4. **Frontend — `TimeRangeContext` + slider primitive** with a baked-in `IDatasetTimeProfile` for Teams (year-level).
-5. **Frontend — Grid viewer** (lowest risk, fastest payoff, validates the filter + time-window contract).
+4. **Frontend — `TimeRangeContext` + slider primitive** with a baked-in `IDatasetTimeProfile` for Teams (year-level). ✅ done 2026-05-25 (frontend; backend filtering deferred)
+5. **Frontend — Grid viewer** (lowest risk, fastest payoff, validates the filter + time-window contract). ✅ first instance done 2026-05-24 — `/sports/mlb` (MlbTeams page) hardcoded to MLB; uses MUI `x-data-grid`; backend `GET /api/teams` now honors `from`/`to` with active-during-window semantics (§12.1.3) by translating epoch-ms → calendar years (`g` accepted but ignored — year resolution suffices for the Team entity).
 6. **Frontend — Map viewer** at Country scope, then State, then County (drill-down).
 7. **Frontend — Dashboard viewer** with a small set of starter charts (teams per state, leagues per sport over time, venue capacity distribution).
 8. **Frontend — per-level admin pages** with bulk CSV/JSON import/export.

@@ -136,6 +136,7 @@ export interface TeamDto {
   state: string | null
   country: string | null
   foundedYear: number | null
+  closedYear: number | null
   primaryColor: string | null
   secondaryColor: string | null
   logoRef: string | null
@@ -149,11 +150,20 @@ export interface CreateTeamRequest {
   state: string | null
   country: string | null
   foundedYear: number | null
+  closedYear: number | null
   primaryColor: string | null
   secondaryColor: string | null
   logoRef: string | null
 }
 export interface UpdateTeamRequest extends CreateTeamRequest { isActive: boolean }
+
+/** Optional time-window filter for team queries. Epoch-ms UTC. Semantics: active-during-window. */
+export interface TeamsTimeWindow {
+  from?: number
+  to?: number
+  /** Granularity hint; server currently ignores (year resolution is sufficient). */
+  g?: string
+}
 
 export const sportsApi = {
   // Sports
@@ -195,6 +205,22 @@ export const sportsApi = {
   // Teams (under a league, optional conference)
   listTeams: (leagueId: string, includeInactive = false) =>
     api.get<TeamDto[]>(`/leagues/${leagueId}/teams`, { params: { includeInactive } }).then((r) => r.data),
+  /**
+   * Flat team query with optional league/state/time filters.
+   * Time semantics: active-during-window per ARCHITECTURE §12.1.3
+   *   FoundedYear ≤ windowEnd ∧ (ClosedYear is null ∨ ClosedYear ≥ windowStart)
+   */
+  queryTeams: (params: { leagueId?: string; state?: string; includeInactive?: boolean; time?: TeamsTimeWindow } = {}) => {
+    const { leagueId, state, includeInactive, time } = params
+    const query: Record<string, string | boolean> = {}
+    if (leagueId) query.leagueId = leagueId
+    if (state) query.state = state
+    if (includeInactive) query.includeInactive = true
+    if (time?.from !== undefined) query.from = String(time.from)
+    if (time?.to !== undefined) query.to = String(time.to)
+    if (time?.g) query.g = time.g
+    return api.get<TeamDto[]>('/teams', { params: query }).then((r) => r.data)
+  },
   createTeam: (leagueId: string, req: CreateTeamRequest) =>
     api.post<TeamDto>(`/leagues/${leagueId}/teams`, req).then((r) => r.data),
   updateTeam: (id: string, req: UpdateTeamRequest) =>

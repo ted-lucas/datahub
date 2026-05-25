@@ -636,6 +636,9 @@ namespace DataHub.Infrastructure.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<int?>("ClosedYear")
+                        .HasColumnType("int");
+
                     b.Property<Guid?>("ConferenceId")
                         .HasColumnType("uniqueidentifier");
 

@@ -160,7 +160,7 @@ public class LeaguesController : ControllerBase
     [HttpGet("{leagueId:guid}/teams")]
     [Authorize(Policy = Permissions.SportsRead)]
     public async Task<IActionResult> GetTeams(Guid leagueId, [FromQuery] string? state = null, [FromQuery] bool includeInactive = false, CancellationToken ct = default)
-        => Ok(await _svc.GetTeamsAsync(leagueId, state, includeInactive, ct));
+        => Ok(await _svc.GetTeamsAsync(leagueId, state, includeInactive, ct: ct));
 
     [HttpPost("{leagueId:guid}/teams")]
     [Authorize(Policy = Permissions.SportsManage)]
@@ -213,8 +213,23 @@ public class TeamsController : ControllerBase
 
     [HttpGet]
     [Authorize(Policy = Permissions.SportsRead)]
-    public async Task<IActionResult> Query([FromQuery] Guid? leagueId = null, [FromQuery] string? state = null, [FromQuery] bool includeInactive = false, CancellationToken ct = default)
-        => Ok(await _svc.GetTeamsAsync(leagueId, state, includeInactive, ct));
+    public async Task<IActionResult> Query(
+        [FromQuery] Guid? leagueId = null,
+        [FromQuery] string? state = null,
+        [FromQuery] bool includeInactive = false,
+        [FromQuery] long? from = null,
+        [FromQuery] long? to = null,
+        [FromQuery] string? g = null,
+        CancellationToken ct = default)
+    {
+        // Time window (epoch-ms, UTC) → calendar years for the active-during filter.
+        // We ignore `g` server-side: year resolution is sufficient because Team only
+        // tracks Founded/Closed at year grain. Frontend keeps `g` for URL fidelity.
+        _ = g;
+        int? activeFromYear = from.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(from.Value).UtcDateTime.Year : null;
+        int? activeToYear = to.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(to.Value).UtcDateTime.Year : null;
+        return Ok(await _svc.GetTeamsAsync(leagueId, state, includeInactive, activeFromYear, activeToYear, ct));
+    }
 
     [HttpGet("{id:guid}")]
     [Authorize(Policy = Permissions.SportsRead)]
